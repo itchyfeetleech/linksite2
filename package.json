@@ -27,7 +27,8 @@
     "@astrojs/svelte": "^6.0.0",
     "@astrojs/tailwind": "^5.1.0",
     "astro": "^4.16.19",
-    "svelte": "^5.1.16"
+    "svelte": "^5.1.16",
+    "zod": "^3.25.8"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.10.2",

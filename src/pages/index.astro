@@ -1,12 +1,21 @@
 ---
 import BaseLayout from "../layouts/BaseLayout.astro";
-import { links } from "../data/links";
 import FauxDesktop from "../components/FauxDesktop.svelte";
+import type { Profile } from "../data/profileSchema";
+import { getEntry } from "astro:content";
+
+const profileEntry = await getEntry('profile', 'default');
+const fallbackProfile: Profile = profileEntry.data;
 
 const year = new Date().getFullYear();
 const lastTuned = new Date().toISOString().slice(0, 10);
 ---
 
 <BaseLayout title="Analog Signals" description="CRT-inspired biolink hub for creative broadcasts.">
-  <FauxDesktop client:load links={links} {year} lastTuned={lastTuned} />
+  <FauxDesktop
+    client:load
+    {year}
+    {lastTuned}
+    fallbackProfile={fallbackProfile}
+  />
 </BaseLayout>

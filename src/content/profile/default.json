@@ -1,0 +1,46 @@
+{
+  "displayName": "Analog Signals",
+  "handle": "analogsignals",
+  "avatar": "/config/avatar-placeholder.svg",
+  "bio": "Experimental broadcast lab tuning in from the liminal space between analog nostalgia and modern signals.",
+  "theme": "green",
+  "links": [
+    {
+      "label": "Main Site",
+      "url": "https://example.com",
+      "icon": "lucide:waveform",
+      "badge": "LIVE"
+    },
+    {
+      "label": "GitHub",
+      "url": "https://github.com/astro-build",
+      "icon": "lucide:github"
+    },
+    {
+      "label": "Broadcast",
+      "url": "https://www.youtube.com/@astrodotbuild",
+      "icon": "lucide:tv"
+    },
+    {
+      "label": "Signal",
+      "url": "mailto:contact@example.com",
+      "icon": "lucide:send"
+    }
+  ],
+  "sections": [
+    {
+      "title": "Broadcast Schedule",
+      "items": [
+        "Wednesday · 21:00 ET — Creative coding session",
+        "Friday · 22:30 ET — Signal test + Q&A"
+      ]
+    },
+    {
+      "title": "Status",
+      "items": [
+        "Noise floor nominal",
+        "Next drop: TBD"
+      ]
+    }
+  ]
+}
