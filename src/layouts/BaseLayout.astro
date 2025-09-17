@@ -1,0 +1,39 @@
+---
+import "../styles/tailwind.css";
+import CRTCurtain from "../components/CRTCurtain.svelte";
+
+interface Props {
+  title?: string;
+  description?: string;
+}
+
+const {
+  title = "Analog Signals",
+  description = "CRT-themed biolink hub running on Astro + Svelte.",
+} = Astro.props satisfies Props;
+---
+<!DOCTYPE html>
+<html lang="en" class="bg-surface">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content={description} />
+    <title>{title}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Space+Grotesk:wght@400;600;700&display=swap"
+    />
+  </head>
+  <body class="bg-surface text-text antialiased">
+    <CRTCurtain client:load>
+      <div class="relative min-h-screen overflow-hidden">
+        <main class="relative z-10 min-h-screen w-full px-4 pb-16 pt-12">
+          <slot />
+        </main>
+      </div>
+    </CRTCurtain>
+  </body>
+</html>
+

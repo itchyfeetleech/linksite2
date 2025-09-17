@@ -1,0 +1,52 @@
+@import './tokens.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html {
+  background-color: rgb(var(--bg));
+}
+
+body {
+  @apply min-h-screen bg-surface font-sans antialiased text-text;
+  font-family: var(--font-sans);
+  background-color: transparent;
+  text-shadow: 0 0 calc(18px * var(--glow-strength)) rgb(var(--accent) / 0.4);
+}
+
+[data-mode='plain'] body {
+  text-shadow: none;
+}
+
+a {
+  @apply text-accent transition-colors;
+}
+
+a:hover,
+a:focus-visible {
+  @apply text-accent-soft;
+}
+
+::selection {
+  background-color: rgb(var(--accent) / 0.3);
+  color: rgb(var(--bg));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body {
+    text-shadow: none;
+  }
+}
+
+@layer utilities {
+  .crt-title-glow {
+    text-shadow: 0 0 calc(0.5rem + var(--glow-strength) * 0.6rem) rgb(var(--accent) / 0.6);
+  }
+}
+
+[data-mode='plain'] .animate-crt-scan {
+  animation: none !important;
+  opacity: 0;
+}
+

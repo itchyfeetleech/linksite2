@@ -1,0 +1,56 @@
+:root {
+  color-scheme: dark;
+  --font-sans: "Space Grotesk", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --bg: 4 13 7;
+  --bg-glare: 15 31 23;
+  --fg: 230 255 238;
+  --muted: 127 191 161;
+  --accent: 45 255 145;
+  --accent-soft: 156 245 201;
+
+  --scanline-opacity: 0.18;
+  --glow-strength: 0.55;
+  --barrel-strength: 0.0025;
+
+  --safe-area-top: env(safe-area-inset-top, 0px);
+  --safe-area-right: env(safe-area-inset-right, 0px);
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-left: env(safe-area-inset-left, 0px);
+}
+
+:root[data-theme='amber'] {
+  --bg: 18 9 2;
+  --bg-glare: 36 20 6;
+  --fg: 255 238 214;
+  --muted: 230 180 120;
+  --accent: 255 180 90;
+  --accent-soft: 255 214 150;
+}
+
+:root[data-mode='plain'] {
+  --scanline-opacity: 0;
+  --glow-strength: 0;
+  --barrel-strength: 0;
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --scanline-opacity: 0.08;
+    --glow-strength: 0.3;
+  }
+}
+
+@media (prefers-contrast: less) {
+  :root {
+    --scanline-opacity: 0.22;
+    --glow-strength: 0.65;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --scanline-opacity: 0.04;
+  }
+}
