@@ -5,7 +5,7 @@ import {
   profileSchema,
   type Profile,
   type ProfileLink,
-  type ProfileSection,
+  type ProfileSectionItem,
   type ProfileTheme
 } from '../data/profileSchema';
 
@@ -20,9 +20,25 @@ export type ResolvedProfileLink = ProfileLink & {
   cta: boolean;
 };
 
+export interface ResolvedProfileSectionItem {
+  label: string | null;
+  value: string | null;
+  href: string | null;
+  icon: string | null;
+  badge: string | null;
+  note: string | null;
+  copyable: boolean;
+  text: string | null;
+}
+
+export interface ResolvedProfileSection {
+  title: string;
+  items: ResolvedProfileSectionItem[];
+}
+
 export type ResolvedProfile = Omit<Profile, 'links' | 'sections' | 'theme'> & {
   links: ResolvedProfileLink[];
-  sections: ProfileSection[];
+  sections: ResolvedProfileSection[];
   theme: ProfileTheme;
 };
 
@@ -55,8 +71,8 @@ const ensureResolvedProfile = (profile: Profile): ResolvedProfile => {
   }));
 
   const sections = (profile.sections ?? []).map((section) => ({
-    ...section,
-    items: [...section.items]
+    title: section.title,
+    items: section.items.map((item) => normalizeSectionItem(item))
   }));
 
   return {
@@ -68,6 +84,35 @@ const ensureResolvedProfile = (profile: Profile): ResolvedProfile => {
     links,
     sections
   } satisfies ResolvedProfile;
+};
+
+const normalizeSectionItem = (item: ProfileSectionItem): ResolvedProfileSectionItem => {
+  if (typeof item === 'string') {
+    return {
+      label: null,
+      value: null,
+      href: null,
+      icon: null,
+      badge: null,
+      note: null,
+      copyable: false,
+      text: item
+    } satisfies ResolvedProfileSectionItem;
+  }
+
+  const icon = item.icon?.trim();
+  const href = item.href?.trim();
+
+  return {
+    label: item.label,
+    value: item.value?.trim() ?? null,
+    href: href && href.length > 0 ? href : null,
+    icon: icon && icon.length > 0 ? icon : null,
+    badge: item.badge ?? null,
+    note: item.note ?? null,
+    copyable: item.copyable ?? false,
+    text: null
+  } satisfies ResolvedProfileSectionItem;
 };
 
 const persistProfile = (profile: Profile) => {
