@@ -25,6 +25,8 @@
 
   const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
+  const browser = typeof window !== 'undefined';
+
   const manager = getContext<WindowManagerContext | undefined>(WINDOW_MANAGER_CONTEXT);
 
   if (!manager) {
@@ -122,8 +124,10 @@
     if (activePointerId !== null) {
       windowElement?.releasePointerCapture(activePointerId);
     }
-    window.removeEventListener('pointermove', handlePointerMove);
-    window.removeEventListener('pointerup', handlePointerUp);
+    if (browser) {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    }
   });
 
   const focusWindow = () => {
@@ -165,8 +169,10 @@
     }
 
     handlePointerCleanup();
-    window.removeEventListener('pointermove', handlePointerMove);
-    window.removeEventListener('pointerup', handlePointerUp);
+    if (browser) {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    }
   };
 
   const handlePointerMove = (event: PointerEvent) => {
@@ -217,8 +223,10 @@
     windowElement?.setPointerCapture(activePointerId);
     windowElement?.classList.add('is-dragging');
 
-    window.addEventListener('pointermove', handlePointerMove);
-    window.addEventListener('pointerup', handlePointerUp);
+    if (browser) {
+      window.addEventListener('pointermove', handlePointerMove);
+      window.addEventListener('pointerup', handlePointerUp);
+    }
   };
 
   const startResize = (event: PointerEvent, direction: ResizeDirection) => {
@@ -240,8 +248,10 @@
     windowElement?.setPointerCapture(activePointerId);
     windowElement?.classList.add('is-resizing');
 
-    window.addEventListener('pointermove', handlePointerMove);
-    window.addEventListener('pointerup', handlePointerUp);
+    if (browser) {
+      window.addEventListener('pointermove', handlePointerMove);
+      window.addEventListener('pointerup', handlePointerUp);
+    }
   };
 
   const applyResize = (

@@ -151,13 +151,12 @@
     };
 
     let shouldWrite = false;
+    const pendingReset: InternalWindow[] = [];
+    const previousIds = new Set(Object.keys(persisted.windows));
 
-    for (const internal of windows.values()) {
-      if (!internal.needsPersist) {
-        continue;
-      }
-
+    windows.forEach((internal) => {
       const state = get(internal.store);
+
       payload.windows[state.id] = {
         bounds: { ...state.bounds },
         isMaximized: state.isMaximized,
@@ -165,8 +164,17 @@
         isClosed: state.isClosed,
         restoreBounds: state.restoreBounds ?? null
       } satisfies WindowPersistentState;
+
+      if (internal.needsPersist) {
+        shouldWrite = true;
+        pendingReset.push(internal);
+      }
+
+      previousIds.delete(state.id);
+    });
+
+    if (previousIds.size > 0) {
       shouldWrite = true;
-      internal.needsPersist = false;
     }
 
     if (!shouldWrite) {
@@ -176,6 +184,9 @@
     try {
       window.localStorage.setItem(storageKey, JSON.stringify(payload));
       persisted = payload;
+      pendingReset.forEach((internal) => {
+        internal.needsPersist = false;
+      });
     } catch (error) {
       console.warn('Failed to persist window state', error);
     }
