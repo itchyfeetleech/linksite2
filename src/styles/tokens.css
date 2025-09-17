@@ -12,6 +12,7 @@
 
   --scanline-opacity: 0.18;
   --glow-strength: 0.55;
+  --aberration-strength: 0;
   --barrel-strength: 0.0025;
 
   --safe-area-top: env(safe-area-inset-top, 0px);
@@ -32,6 +33,7 @@
 :root[data-mode='plain'] {
   --scanline-opacity: 0;
   --glow-strength: 0;
+  --aberration-strength: 0;
   --barrel-strength: 0;
 }
 

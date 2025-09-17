@@ -1,11 +1,12 @@
 import { writable } from 'svelte/store';
 
 export type CRTTheme = 'green' | 'amber';
-export type CRTToggle = 'scanlines' | 'glow' | 'barrel';
+export type CRTToggle = 'scanlines' | 'glow' | 'aberration' | 'barrel';
 
 export interface CRTIntensity {
   scanlines: number;
   glow: number;
+  aberration: number;
   barrel: number;
 }
 
@@ -14,6 +15,7 @@ export interface CRTEffectsState {
   plainMode: boolean;
   scanlines: boolean;
   glow: boolean;
+  aberration: boolean;
   barrel: boolean;
   intensity: CRTIntensity;
 }
@@ -25,10 +27,12 @@ const DEFAULT_STATE: CRTEffectsState = {
   plainMode: false,
   scanlines: true,
   glow: true,
+  aberration: false,
   barrel: true,
   intensity: {
     scanlines: 0.18,
     glow: 0.55,
+    aberration: 0.35,
     barrel: 0.0025
   }
 };
@@ -53,10 +57,12 @@ const applyDocumentEffects = (state: CRTEffectsState) => {
 
   const scanlineValue = state.plainMode || !state.scanlines ? 0 : state.intensity.scanlines;
   const glowValue = state.plainMode || !state.glow ? 0 : state.intensity.glow;
+  const aberrationValue = state.plainMode || !state.aberration ? 0 : state.intensity.aberration;
   const barrelValue = state.plainMode || !state.barrel ? 0 : state.intensity.barrel;
 
   root.style.setProperty('--scanline-opacity', scanlineValue.toString());
   root.style.setProperty('--glow-strength', glowValue.toString());
+  root.style.setProperty('--aberration-strength', aberrationValue.toString());
   root.style.setProperty('--barrel-strength', barrelValue.toString());
 };
 
@@ -84,6 +90,7 @@ const readPersistedState = (): CRTEffectsState => {
 
     next.intensity.scanlines = clamp(next.intensity.scanlines, 0, 1);
     next.intensity.glow = clamp(next.intensity.glow, 0, 1);
+    next.intensity.aberration = clamp(next.intensity.aberration, 0, 1);
     next.intensity.barrel = clamp(next.intensity.barrel, 0, 0.01);
 
     return next;
@@ -137,12 +144,20 @@ const setIntensity = (key: CRTToggle, value: number) => {
   }));
 };
 
+const reset = () => {
+  baseWritable.set({
+    ...DEFAULT_STATE,
+    intensity: { ...DEFAULT_STATE.intensity }
+  });
+};
+
 export const crtEffects = {
   subscribe: baseWritable.subscribe,
   setTheme,
   togglePlainMode,
   toggleEffect,
-  setIntensity
+  setIntensity,
+  reset
 };
 
 export { DEFAULT_STATE as defaultEffectsState };
