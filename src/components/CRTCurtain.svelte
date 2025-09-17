@@ -2,7 +2,7 @@
   import { crtEffects, type CRTTheme, type CRTToggle } from '../stores/crtEffects';
 
   const themeOptions: CRTTheme[] = ['green', 'amber'];
-  const toggleOrder: CRTToggle[] = ['scanlines', 'glow', 'barrel'];
+  const toggleOrder: CRTToggle[] = ['scanlines', 'glow', 'aberration', 'barrel'];
 
   let controlsOpen = false;
 
@@ -11,18 +11,35 @@
     amber: 'Amber phosphor',
     scanlines: 'Scanlines',
     glow: 'Glass glow',
-    barrel: 'Barrel warp',
+    aberration: 'Chromatic aberration',
+    barrel: 'Distortion warp',
     plain: 'Plain mode'
   };
 
   $: state = $crtEffects;
   $: scanlineOpacity = state && !state.plainMode && state.scanlines ? state.intensity.scanlines : 0;
   $: glowStrength = state && !state.plainMode && state.glow ? state.intensity.glow : 0;
+  $: aberrationStrength =
+    state && !state.plainMode && state.aberration ? state.intensity.aberration : 0;
   $: barrelStrength = state && !state.plainMode && state.barrel ? state.intensity.barrel : 0;
   $: glowOverlayOpacity = glowStrength ? Math.min(glowStrength + 0.1, 0.85) : 0;
-  $: barrelFilter = barrelStrength ? `url('#crt-barrel') contrast(1.05) saturate(1.05)` : 'none';
+  let stageFilter = 'none';
+  $: stageFilter = (() => {
+    const parts: string[] = [];
+    if (barrelStrength) {
+      parts.push(`url('#crt-barrel') contrast(1.05) saturate(1.05)`);
+    }
+    if (aberrationStrength) {
+      const offset = Number((aberrationStrength * 7 + 1.2).toFixed(3));
+      parts.push(
+        `drop-shadow(${offset}px 0 0 rgba(255, 40, 120, 0.45)) drop-shadow(${-offset}px 0 0 rgba(0, 220, 255, 0.45))`
+      );
+    }
+    return parts.length ? parts.join(' ') : 'none';
+  })();
   $: barrelTransform = barrelStrength ? `perspective(1100px) scale(${(1 + barrelStrength * 6).toFixed(3)})` : 'none';
   $: adjustmentsDisabled = Boolean(state?.plainMode);
+  $: willChange = barrelStrength || aberrationStrength ? 'filter, transform' : 'auto';
 
   const formatIntensity = (key: CRTToggle) => {
     const value = state?.intensity[key] ?? 0;
@@ -76,7 +93,7 @@
   </svg>
   <div
     class="crt-stage"
-    style={`filter: ${barrelFilter}; transform: ${barrelTransform}; will-change: ${barrelStrength ? 'filter, transform' : 'auto'};`}
+    style={`filter: ${stageFilter}; transform: ${barrelTransform}; will-change: ${willChange};`}
   >
     <slot />
     <div aria-hidden="true" class="crt-overlay">

@@ -4,6 +4,7 @@
   import Window from './Window.svelte';
   import LinksApp from './LinksApp.svelte';
   import Taskbar from './Taskbar.svelte';
+  import DebugOverlay from './DebugOverlay.svelte';
   import type { Profile } from '../data/profileSchema';
   import {
     initializeProfileStore,
@@ -13,6 +14,7 @@
     type ResolvedProfileSectionItem
   } from '../stores/profileStore';
   import { crtEffects } from '../stores/crtEffects';
+  import { logger } from '../lib/logger';
 
   export let fallbackProfile: Profile;
   export let year: number;
@@ -67,6 +69,7 @@
   let sourceMessage = SOURCE_MESSAGES[sourceKey];
   let lastUpdatedLabel = '';
   let isRefreshing = false;
+  let debugOverlayOpen = false;
 
   $: if (!initialized) {
     initializeProfileStore(fallbackProfile);
@@ -103,6 +106,13 @@
     if (hasWindow) {
       resolvedSiteUrl = window.location.href;
     }
+
+    logger.info('Feature flags', {
+      dev: import.meta.env.DEV,
+      prod: import.meta.env.PROD,
+      preview: import.meta.env.PREVIEW ?? false,
+      ssr: import.meta.env.SSR
+    });
   });
 
   const formatSectionItem = (item: ResolvedProfileSectionItem) => {
@@ -232,8 +242,10 @@
     </div>
   </Window>
 
-  <Taskbar linksWindowId="links" />
+  <Taskbar linksWindowId="links" on:longpress={() => (debugOverlayOpen = !debugOverlayOpen)} />
 </WindowManager>
+
+<DebugOverlay bind:open={debugOverlayOpen} />
 
 <style>
   .console-content {
