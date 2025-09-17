@@ -71,6 +71,9 @@ export interface WindowManagerContext {
   bringToFront(id: string): number;
   getViewportBounds(): DOMRect | null;
   clampToViewport(bounds: Bounds): Bounds;
+  windows: Readable<WindowInstanceState[]>;
+  activateWindow(id: string): void;
+  minimizeWindow(id: string, value: boolean): void;
 }
 
 export const WINDOW_MANAGER_CONTEXT = Symbol('biolink-window-manager');

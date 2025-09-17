@@ -2,6 +2,7 @@
   import WindowManager from './WindowManager.svelte';
   import Window from './Window.svelte';
   import CrtLinkList, { type LinkItem } from './CrtLinkList.svelte';
+  import Taskbar from './Taskbar.svelte';
 
   export let links: LinkItem[] = [];
   export let year: number;
@@ -17,7 +18,7 @@
   const schemaVersion = 1;
 </script>
 
-<WindowManager {storageKey} {schemaVersion} dockLabel="Faux OS dock">
+<WindowManager {storageKey} {schemaVersion}>
   <Window
     id="console"
     title="Analog Signals Console"
@@ -39,8 +40,8 @@
   </Window>
 
   <Window
-    id="directory"
-    title="Signal Directory"
+    id="links"
+    title="Links"
     initialBounds={{ x: 640, y: 120, width: 480, height: 480 }}
     minWidth={360}
     minHeight={320}
@@ -76,6 +77,8 @@
       </div>
     </div>
   </Window>
+
+  <Taskbar linksWindowId="links" />
 </WindowManager>
 
 <style>
