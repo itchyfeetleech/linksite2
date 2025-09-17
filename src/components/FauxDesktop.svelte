@@ -1,20 +1,23 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import WindowManager from './WindowManager.svelte';
   import Window from './Window.svelte';
-  import CrtLinkList, { type LinkItem } from './CrtLinkList.svelte';
+  import LinksApp from './LinksApp.svelte';
   import Taskbar from './Taskbar.svelte';
   import type { Profile } from '../data/profileSchema';
   import {
     initializeProfileStore,
     profileStore,
     type ProfileState,
-    type ResolvedProfile
+    type ResolvedProfile,
+    type ResolvedProfileSectionItem
   } from '../stores/profileStore';
   import { crtEffects } from '../stores/crtEffects';
 
   export let fallbackProfile: Profile;
   export let year: number;
   export let lastTuned: string;
+  export let siteUrl: string;
 
   const formattedTuned = new Date(lastTuned).toLocaleString(undefined, {
     year: 'numeric',
@@ -46,10 +49,15 @@
 
   const DEFAULT_SOURCE: ProfileState['source'] = 'content';
 
+  const hasWindow = typeof window !== 'undefined';
+  const linksInitialState = {
+    isMaximized: hasWindow ? window.matchMedia('(max-width: 768px)').matches : false
+  };
+
   let initialized = false;
   let state: ProfileState;
   let profile: ResolvedProfile | null = null;
-  let links: LinkItem[] = [];
+  let resolvedSiteUrl = siteUrl;
   let sections: ResolvedProfile['sections'] = [];
   let channelLine = 'Channel » ANALOG SIGNALS';
   let displayName = 'Creative Broadcast Lab';
@@ -67,12 +75,6 @@
 
   $: state = $store;
   $: profile = state?.profile ?? null;
-  $: links =
-    profile?.links.map((link) => ({
-      href: link.url,
-      label: link.label,
-      badge: link.badge
-    })) ?? [];
   $: sections = profile?.sections ?? [];
   $: channelLine = profile
     ? `Channel » ${profile.handle ? formatHandle(profile.handle) : profile.displayName}`
@@ -96,6 +98,23 @@
   $: if (profile) {
     crtEffects.setTheme(profile.theme);
   }
+
+  onMount(() => {
+    if (hasWindow) {
+      resolvedSiteUrl = window.location.href;
+    }
+  });
+
+  const formatSectionItem = (item: ResolvedProfileSectionItem) => {
+    const primary = item.value ?? item.text ?? '';
+    const label = item.label ?? '';
+
+    if (label && primary) {
+      return `${label}: ${primary}`;
+    }
+
+    return label || primary;
+  };
 </script>
 
 <WindowManager {storageKey} {schemaVersion}>
@@ -142,10 +161,17 @@
     id="links"
     title="Links"
     initialBounds={{ x: 640, y: 120, width: 480, height: 480 }}
-    minWidth={360}
+    minWidth={320}
     minHeight={320}
+    initialState={linksInitialState}
   >
-    <CrtLinkList {links} />
+    {#if profile}
+      <LinksApp {profile} siteUrl={resolvedSiteUrl} />
+    {:else}
+      <div class="flex h-full items-center justify-center p-6 text-sm text-muted">
+        Loading profile…
+      </div>
+    {/if}
   </Window>
 
   <Window
@@ -182,11 +208,11 @@
           <div class="status-card large section-card">
             <span class="status-label">{section.title}</span>
             {#if section.items.length === 1}
-              <span class="status-value">{section.items[0]}</span>
+              <span class="status-value">{formatSectionItem(section.items[0])}</span>
             {:else}
               <ul>
-                {#each section.items as item (item)}
-                  <li>{item}</li>
+                {#each section.items as item, index (`${section.title}-${index}`)}
+                  <li>{formatSectionItem(item)}</li>
                 {/each}
               </ul>
             {/if}

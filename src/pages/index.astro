@@ -9,6 +9,7 @@ const fallbackProfile: Profile = profileEntry.data;
 
 const year = new Date().getFullYear();
 const lastTuned = new Date().toISOString().slice(0, 10);
+const canonicalUrl = Astro.url?.href ?? Astro.site?.href ?? 'https://biolink.example.com/';
 ---
 
 <BaseLayout title="Analog Signals" description="CRT-inspired biolink hub for creative broadcasts.">
@@ -17,5 +18,6 @@ const lastTuned = new Date().toISOString().slice(0, 10);
     {year}
     {lastTuned}
     fallbackProfile={fallbackProfile}
+    siteUrl={canonicalUrl}
   />
 </BaseLayout>

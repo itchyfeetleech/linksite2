@@ -9,7 +9,8 @@
       "label": "Main Site",
       "url": "https://example.com",
       "icon": "lucide:waveform",
-      "badge": "LIVE"
+      "badge": "LIVE",
+      "cta": true
     },
     {
       "label": "GitHub",
@@ -29,17 +30,72 @@
   ],
   "sections": [
     {
-      "title": "Broadcast Schedule",
+      "title": "Updates",
       "items": [
-        "Wednesday · 21:00 ET — Creative coding session",
-        "Friday · 22:30 ET — Signal test + Q&A"
+        {
+          "label": "Latest Drop",
+          "value": "Signal Drift EP is now streaming."
+        },
+        {
+          "label": "Next Broadcast",
+          "value": "Friday · 22:30 ET — Signal test + Q&A"
+        }
       ]
     },
     {
-      "title": "Status",
+      "title": "Contact",
       "items": [
-        "Noise floor nominal",
-        "Next drop: TBD"
+        {
+          "label": "Email",
+          "value": "contact@example.com",
+          "href": "mailto:contact@example.com",
+          "copyable": true
+        },
+        {
+          "label": "Matrix",
+          "value": "@analog:signals.chat",
+          "href": "https://matrix.to/#/@analog:signals.chat",
+          "copyable": true
+        }
+      ]
+    },
+    {
+      "title": "Tip Jar",
+      "items": [
+        {
+          "label": "Ko-fi",
+          "href": "https://ko-fi.com/example"
+        },
+        {
+          "label": "ETH",
+          "value": "0x90fffa2b34be92f6c88df4450bf4429cb12b2300",
+          "copyable": true
+        }
+      ]
+    },
+    {
+      "title": "Socials",
+      "items": [
+        {
+          "label": "Mastodon",
+          "href": "https://fosstodon.org/@analogsignals",
+          "icon": "lucide:radio"
+        },
+        {
+          "label": "YouTube",
+          "href": "https://www.youtube.com/@astrodotbuild",
+          "icon": "lucide:tv"
+        }
+      ]
+    },
+    {
+      "title": "Now Playing",
+      "items": [
+        {
+          "label": "Channel",
+          "value": "Futureshock FM",
+          "note": "Looping from the control room"
+        }
       ]
     }
   ]
