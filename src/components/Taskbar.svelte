@@ -193,10 +193,6 @@
     startMenuItems = [];
   };
 
-  const setWindowButton = (index: number, element: HTMLButtonElement | null) => {
-    windowButtons[index] = element;
-  };
-
   const focusWindowButton = (index: number) => {
     if (!windowEntries.length) {
       return;
@@ -307,10 +303,6 @@
     target?.focus();
   };
 
-  const setStartMenuItem = (index: number, element: HTMLButtonElement | null) => {
-    startMenuItems[index] = element;
-  };
-
   const handleWindowFocus = (index: number) => {
     rovingIndex = index;
   };
@@ -364,7 +356,7 @@
     {:else}
       {#each windowEntries as win, index (win.id)}
         <button
-          bind:this={(element) => setWindowButton(index, element)}
+          bind:this={windowButtons[index]}
           type="button"
           class="flex min-h-10 shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-left text-[0.75rem] transition data-[state=active]:bg-accent/30 data-[state=active]:text-accent-soft data-[state=minimized]:opacity-70 hover:bg-accent/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           role="option"
@@ -412,7 +404,7 @@
     <div class="flex flex-col gap-2">
       {#each startItems as item, index (item.id)}
         <button
-          bind:this={(element) => setStartMenuItem(index, element)}
+          bind:this={startMenuItems[index]}
           type="button"
           class="flex items-start gap-3 rounded-xl border border-transparent bg-accent/10 px-3 py-2 text-left text-sm text-accent transition hover:bg-accent/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           role="menuitem"
