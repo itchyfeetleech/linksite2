@@ -16,7 +16,6 @@
 
   export let storageKey = 'biolink-window-state';
   export let schemaVersion = 1;
-  export let dockLabel = 'Window dock';
 
   interface PersistPayload {
     version: number;
@@ -258,6 +257,51 @@
     updateFocusFlags(id);
   };
 
+  const activateWindow = (id: string) => {
+    const internal = windows.get(id);
+    if (!internal) {
+      return;
+    }
+
+    applyUpdate(
+      internal,
+      (state) => ({
+        ...state,
+        isMinimized: false,
+        isClosed: false
+      }),
+      { persist: true, interaction: 'programmatic' }
+    );
+
+    focusWindow(id);
+  };
+
+  const minimizeWindow = (id: string, value: boolean) => {
+    const internal = windows.get(id);
+    if (!internal) {
+      return;
+    }
+
+    applyUpdate(
+      internal,
+      (state) => ({
+        ...state,
+        isMinimized: value,
+        isFocused: value ? false : state.isFocused,
+        isClosed: value ? state.isClosed : false
+      }),
+      { persist: true, interaction: 'programmatic' }
+    );
+
+    if (value) {
+      if (focusedId === id) {
+        updateFocusFlags(null);
+      }
+    } else {
+      focusWindow(id);
+    }
+  };
+
   const applyUpdate = (
     internal: InternalWindow,
     mutate: (state: WindowInstanceState) => WindowInstanceState,
@@ -463,25 +507,6 @@
     }
   });
 
-  const handleDockActivate = (id: string) => {
-    const internal = windows.get(id);
-    if (!internal) {
-      return;
-    }
-
-    applyUpdate(
-      internal,
-      (state) => ({
-        ...state,
-        isMinimized: false,
-        isClosed: false
-      }),
-      { persist: true, interaction: 'programmatic' }
-    );
-
-    focusWindow(id);
-  };
-
   onMount(() => {
     if (!container) {
       return;
@@ -523,35 +548,17 @@
     focusWindow,
     bringToFront,
     getViewportBounds: () => viewportRect,
-    clampToViewport
+    clampToViewport,
+    windows: { subscribe: windowList.subscribe },
+    activateWindow,
+    minimizeWindow
   };
 
   setContext(WINDOW_MANAGER_CONTEXT, contextValue);
-
-  let dockWindows: WindowInstanceState[] = [];
-
-  $: dockWindows = $windowList.filter((win) => (win.isMinimized || win.isClosed));
 </script>
 
 <div class="window-manager" bind:this={container}>
   <slot />
-  {#if dockWindows.length}
-    <div class="window-dock" role="toolbar" aria-label={dockLabel}>
-      {#each dockWindows as win (win.id)}
-        <button
-          type="button"
-          class="dock-item"
-          data-state={win.isClosed ? 'closed' : 'minimized'}
-          on:click={() => handleDockActivate(win.id)}
-        >
-          {#if win.isClosed}
-            <span aria-hidden="true" class="dock-indicator">●</span>
-          {/if}
-          {win.title}
-        </button>
-      {/each}
-    </div>
-  {/if}
 </div>
 
 <style>
@@ -564,65 +571,4 @@
     touch-action: none;
   }
 
-  .window-dock {
-    position: absolute;
-    bottom: 1rem;
-    left: 50%;
-    transform: translateX(-50%);
-    display: flex;
-    gap: 0.5rem;
-    padding: 0.5rem 0.75rem;
-    border-radius: 999px;
-    background: rgb(var(--surface-glare, 15 15 15) / 0.85);
-    backdrop-filter: blur(10px);
-    border: 1px solid rgb(var(--accent) / 0.35);
-    box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 0.35);
-    z-index: 9999;
-  }
-
-  .dock-item {
-    appearance: none;
-    border: none;
-    outline: none;
-    background: rgb(var(--accent) / 0.12);
-    color: rgb(var(--accent));
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 0.2em;
-    padding: 0.35rem 0.8rem;
-    border-radius: 999px;
-    font-size: 0.65rem;
-    cursor: pointer;
-    transition: background 150ms ease, transform 150ms ease, color 150ms ease, box-shadow 150ms ease;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-  }
-
-  .dock-item:hover,
-  .dock-item:focus-visible {
-    background: rgb(var(--accent) / 0.2);
-    color: rgb(var(--accent-soft, 180 255 180));
-    transform: translateY(-1px);
-  }
-
-  .dock-item:focus-visible {
-    box-shadow: 0 0 0 2px rgb(var(--accent) / 0.45);
-  }
-
-  .dock-item[data-state='closed'] {
-    background: rgb(255 90 90 / 0.18);
-    color: rgb(255 190 190 / 0.9);
-  }
-
-  .dock-item[data-state='closed']:hover,
-  .dock-item[data-state='closed']:focus-visible {
-    background: rgb(255 90 90 / 0.28);
-    color: rgb(255 220 220);
-  }
-
-  .dock-indicator {
-    font-size: 0.7rem;
-    line-height: 1;
-  }
 </style>
