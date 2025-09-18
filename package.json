@@ -28,7 +28,9 @@
     "@astrojs/tailwind": "^5.1.0",
     "@iconify/svelte": "^5.0.2",
     "astro": "^4.16.19",
+    "html2canvas": "^1.4.1",
     "motion": "^12.23.13",
+    "picogl": "^0.17.9",
     "qrcode-generator": "^2.0.4",
     "svelte": "^5.1.16",
     "zod": "^3.25.8"
@@ -43,6 +45,7 @@
     "@testing-library/svelte": "^5.2.8",
     "@types/node": "^22.8.3",
     "@vitest/coverage-v8": "^3.2.4",
+    "@webgpu/types": "^0.1.65",
     "autoprefixer": "^10.4.21",
     "axe-core": "^4.10.3",
     "jsdom": "^24.1.3",

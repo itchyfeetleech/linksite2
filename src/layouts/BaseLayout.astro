@@ -1,6 +1,7 @@
 ---
 import "../styles/tailwind.css";
 import CRTCurtain from "../components/CRTCurtain.svelte";
+import CRTPostFX from "../components/CRTPostFX.svelte";
 
 interface Props {
   title?: string;
@@ -34,6 +35,7 @@ const {
         </main>
       </div>
     </CRTCurtain>
+    <CRTPostFX client:load />
   </body>
 </html>
 

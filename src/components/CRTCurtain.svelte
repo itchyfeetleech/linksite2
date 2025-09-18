@@ -1,10 +1,13 @@
 <script lang="ts">
-  import { crtEffects, type CRTTheme, type CRTToggle } from '../stores/crtEffects';
+  import { crtEffects, crtRenderMode, type CRTTheme, type CRTToggle } from '../stores/crtEffects';
+  import type { CRTRenderMode } from '../lib/crt/types';
 
   const themeOptions: CRTTheme[] = ['green', 'amber'];
   const toggleOrder: CRTToggle[] = ['scanlines', 'glow', 'aberration', 'barrel'];
 
   let controlsOpen = false;
+  let renderMode: CRTRenderMode = 'css';
+  let cssModeEnabled = true;
 
   const labels: Record<CRTTheme | CRTToggle | 'plain', string> = {
     green: 'Green phosphor',
@@ -17,14 +20,22 @@
   };
 
   $: state = $crtEffects;
-  $: scanlineOpacity = state && !state.plainMode && state.scanlines ? state.intensity.scanlines : 0;
-  $: glowStrength = state && !state.plainMode && state.glow ? state.intensity.glow : 0;
+  $: renderMode = $crtRenderMode;
+  $: cssModeEnabled = renderMode === 'css';
+  $: scanlineOpacity =
+    cssModeEnabled && state && !state.plainMode && state.scanlines ? state.intensity.scanlines : 0;
+  $: glowStrength =
+    cssModeEnabled && state && !state.plainMode && state.glow ? state.intensity.glow : 0;
   $: aberrationStrength =
-    state && !state.plainMode && state.aberration ? state.intensity.aberration : 0;
-  $: barrelStrength = state && !state.plainMode && state.barrel ? state.intensity.barrel : 0;
+    cssModeEnabled && state && !state.plainMode && state.aberration ? state.intensity.aberration : 0;
+  $: barrelStrength =
+    cssModeEnabled && state && !state.plainMode && state.barrel ? state.intensity.barrel : 0;
   $: glowOverlayOpacity = glowStrength ? Math.min(glowStrength + 0.1, 0.85) : 0;
   let stageFilter = 'none';
   $: stageFilter = (() => {
+    if (!cssModeEnabled) {
+      return 'none';
+    }
     const parts: string[] = [];
     if (barrelStrength) {
       parts.push(`url('#crt-barrel') contrast(1.05) saturate(1.05)`);
@@ -37,9 +48,13 @@
     }
     return parts.length ? parts.join(' ') : 'none';
   })();
-  $: barrelTransform = barrelStrength ? `perspective(1100px) scale(${(1 + barrelStrength * 6).toFixed(3)})` : 'none';
+  $: barrelTransform =
+    cssModeEnabled && barrelStrength
+      ? `perspective(1100px) scale(${(1 + barrelStrength * 6).toFixed(3)})`
+      : 'none';
   $: adjustmentsDisabled = Boolean(state?.plainMode);
-  $: willChange = barrelStrength || aberrationStrength ? 'filter, transform' : 'auto';
+  $: willChange =
+    cssModeEnabled && (barrelStrength || aberrationStrength) ? 'filter, transform' : 'auto';
 
   const formatIntensity = (key: CRTToggle) => {
     const value = state?.intensity[key] ?? 0;
