@@ -23,6 +23,8 @@
   let handshakeTimer: ReturnType<typeof window.setTimeout> | null = null;
   let targetOrigin = '*';
   const originWhitelist = new Set<string>();
+  let allowAttr: string | undefined;
+  let permissionAttr: string | undefined;
 
   const MIN_HEIGHT = 120;
   const HANDSHAKE_TIMEOUT = 8000;
@@ -190,8 +192,8 @@
 
   $: applyInitialHeight(sandbox);
 
-  $: const allowAttr = sandbox.allow?.trim();
-  $: const permissionAttr = sandbox.permissions?.length
+  $: allowAttr = sandbox.allow?.trim();
+  $: permissionAttr = sandbox.permissions?.length
     ? sandbox.permissions.join('; ')
     : undefined;
 </script>
