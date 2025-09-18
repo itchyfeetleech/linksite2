@@ -2,11 +2,15 @@ import html2canvas from 'html2canvas';
 import { logger } from '../logger';
 import type { CaptureFrame } from './types';
 
+export interface CaptureStats {
+  duration: number;
+}
+
 interface DomCaptureOptions {
   root: HTMLElement;
   ignore?: (element: Element) => boolean;
   throttleMs?: number;
-  onCapture: (frame: CaptureFrame) => Promise<void> | void;
+  onCapture: (frame: CaptureFrame, stats: CaptureStats) => Promise<void> | void;
 }
 
 export interface DomCaptureController {
@@ -132,6 +136,7 @@ export const createDomCapture = ({
 
     try {
       const dpr = window.devicePixelRatio || 1;
+      const captureStart = performance.now();
       const canvas = await html2canvas(root, {
         backgroundColor: null,
         useCORS: true,
@@ -141,12 +146,13 @@ export const createDomCapture = ({
       });
 
       const bitmap = await createImageBitmap(canvas);
+      const duration = performance.now() - captureStart;
       await onCapture({
         bitmap,
         width: canvas.width,
         height: canvas.height,
         dpr
-      });
+      }, { duration });
     } catch (error) {
       logger.warn('CRT postFX capture failed', error);
     } finally {

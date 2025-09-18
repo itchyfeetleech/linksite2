@@ -1,6 +1,8 @@
 import { writable } from 'svelte/store';
 import type { CRTRenderMode } from '../lib/crt/types';
 
+export type CRTModePreference = 'auto' | CRTRenderMode;
+
 export type CRTTheme = 'green' | 'amber';
 export type CRTToggle = 'scanlines' | 'glow' | 'aberration' | 'barrel';
 
@@ -19,6 +21,7 @@ export interface CRTEffectsState {
   aberration: boolean;
   barrel: boolean;
   intensity: CRTIntensity;
+  modePreference: CRTModePreference;
 }
 
 const STORAGE_KEY = 'biolink-crt-effects';
@@ -35,7 +38,8 @@ const DEFAULT_STATE: CRTEffectsState = {
     glow: 0.55,
     aberration: 0.35,
     barrel: 0.0025
-  }
+  },
+  modePreference: 'auto'
 };
 
 const hasWindow = typeof window !== 'undefined';
@@ -59,7 +63,11 @@ const applyDocumentEffects = (state: CRTEffectsState, mode: CRTRenderMode) => {
   const cssEnabled = mode === 'css';
 
   const scanlineValue = !cssEnabled || state.plainMode || !state.scanlines ? 0 : state.intensity.scanlines;
-  const glowValue = !cssEnabled || state.plainMode || !state.glow ? 0 : state.intensity.glow;
+  const glowValue = state.plainMode
+    ? 0
+    : cssEnabled && state.glow
+      ? state.intensity.glow
+      : 0.08;
   const aberrationValue = !cssEnabled || state.plainMode || !state.aberration ? 0 : state.intensity.aberration;
   const barrelValue = !cssEnabled || state.plainMode || !state.barrel ? 0 : state.intensity.barrel;
 
@@ -95,6 +103,10 @@ const readPersistedState = (): CRTEffectsState => {
     next.intensity.glow = clamp(next.intensity.glow, 0, 1);
     next.intensity.aberration = clamp(next.intensity.aberration, 0, 1);
     next.intensity.barrel = clamp(next.intensity.barrel, 0, 0.01);
+
+    if (next.modePreference !== 'webgpu' && next.modePreference !== 'webgl2' && next.modePreference !== 'css') {
+      next.modePreference = 'auto';
+    }
 
     return next;
   } catch (error) {
@@ -165,6 +177,13 @@ const setRenderMode = (mode: CRTRenderMode) => {
   applyDocumentEffects(latestState, currentMode);
 };
 
+const setModePreference = (mode: CRTModePreference) => {
+  baseWritable.update((state) => ({
+    ...state,
+    modePreference: mode
+  }));
+};
+
 export const crtEffects = {
   subscribe: baseWritable.subscribe,
   setTheme,
@@ -172,7 +191,8 @@ export const crtEffects = {
   toggleEffect,
   setIntensity,
   reset,
-  setRenderMode
+  setRenderMode,
+  setModePreference
 };
 
 export { DEFAULT_STATE as defaultEffectsState };
