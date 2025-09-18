@@ -44,7 +44,8 @@ export class WebGpuRenderer implements CRTGpuRenderer {
     this.context.configure({
       device: this.device,
       format: this.format,
-      alphaMode: 'premultiplied'
+      alphaMode: 'premultiplied',
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_DST
     });
 
     const module = this.device.createShaderModule({ code: shaderSource });
@@ -114,7 +115,10 @@ export class WebGpuRenderer implements CRTGpuRenderer {
       this.texture = this.device.createTexture({
         size: { width: frame.width, height: frame.height },
         format: 'rgba8unorm',
-        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
+        usage:
+          GPUTextureUsage.TEXTURE_BINDING |
+          GPUTextureUsage.COPY_DST |
+          GPUTextureUsage.RENDER_ATTACHMENT
       });
       this.textureSize = { width: frame.width, height: frame.height };
       this.updateBindGroup();
