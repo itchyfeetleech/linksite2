@@ -5,6 +5,7 @@
     type WindowInstanceState,
     type WindowManagerContext
   } from './windowing';
+  import type { IconKind, PluginDefinition } from '../plugins/registry';
 
   const manager = getContext<WindowManagerContext | undefined>(WINDOW_MANAGER_CONTEXT);
   if (!manager) {
@@ -12,6 +13,7 @@
   }
 
   export let linksWindowId = 'links';
+  export let plugins: PluginDefinition[] = [];
 
   const windowsStore = manager.windows;
 
@@ -46,38 +48,44 @@
     lastActiveId = activeWindowId;
   }
 
-  interface StartItem {
+  interface LauncherItem {
     id: string;
     label: string;
     description: string;
-  }
-
-  interface PinnedApp {
-    id: string;
-    label: string;
     icon: string;
-    description: string;
+    iconKind: IconKind;
   }
 
-  let startItems: StartItem[] = [];
-  let pinnedApps: PinnedApp[] = [];
+  let startItems: LauncherItem[] = [];
+  let pinnedApps: LauncherItem[] = [];
+  let pluginStartEntries: LauncherItem[] = [];
+  let pluginPinnedEntries: LauncherItem[] = [];
 
-  $: startItems = [
-    {
-      id: linksWindowId,
-      label: 'Links',
-      description: 'Launch the Links app'
-    }
-  ];
+  const baseLauncher = (): LauncherItem => ({
+    id: linksWindowId,
+    label: 'Links',
+    description: 'Launch the Links app',
+    icon: '🔗',
+    iconKind: 'glyph'
+  });
 
-  $: pinnedApps = [
-    {
-      id: linksWindowId,
-      label: 'Links',
-      icon: '🔗',
-      description: 'Launch the Links app'
-    }
-  ];
+  const createLauncherFromPlugin = (plugin: PluginDefinition): LauncherItem => ({
+    id: plugin.id,
+    label: plugin.title,
+    description: plugin.description?.length ? plugin.description : `Launch ${plugin.title}`,
+    icon: plugin.icon,
+    iconKind: plugin.iconKind
+  });
+
+  $: pluginStartEntries = plugins
+    .filter((plugin) => plugin.showInStart)
+    .map(createLauncherFromPlugin);
+
+  $: pluginPinnedEntries = plugins.filter((plugin) => plugin.pinned).map(createLauncherFromPlugin);
+
+  $: startItems = [baseLauncher(), ...pluginStartEntries];
+
+  $: pinnedApps = [baseLauncher(), ...pluginPinnedEntries];
 
   const dispatch = createEventDispatcher<{ longpress: void }>();
 
@@ -340,7 +348,11 @@
           title={app.description}
           on:click={() => launchApp(app.id)}
         >
-          <span aria-hidden="true">{app.icon}</span>
+          {#if app.iconKind === 'image'}
+            <img src={app.icon} alt="" class="h-6 w-6" loading="lazy" decoding="async" />
+          {:else}
+            <span aria-hidden="true">{app.icon}</span>
+          {/if}
         </button>
       {/each}
     </div>
@@ -411,7 +423,11 @@
           on:click={() => launchApp(item.id)}
           on:keydown={(event) => handleStartMenuKeydown(event, index)}
         >
-          <span aria-hidden="true" class="mt-0.5 text-lg">🔗</span>
+          {#if item.iconKind === 'image'}
+            <img src={item.icon} alt="" class="start-icon" loading="lazy" decoding="async" />
+          {:else}
+            <span aria-hidden="true" class="start-icon start-icon--glyph">{item.icon}</span>
+          {/if}
           <span class="flex flex-col">
             <span class="font-semibold tracking-[0.08em]">{item.label}</span>
             <span class="text-[0.75rem] text-muted">{item.description}</span>
@@ -422,3 +438,26 @@
   </div>
 {/if}
 </nav>
+
+<style>
+  .start-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 0.4rem;
+    object-fit: contain;
+  }
+
+  .start-icon--glyph {
+    font-size: 1.1rem;
+    line-height: 1;
+  }
+
+  .start-icon:not(.start-icon--glyph) {
+    background: rgb(var(--surface, 12 12 12) / 0.5);
+    border: 1px solid rgb(var(--accent, 150 200 150) / 0.25);
+    padding: 0.15rem;
+  }
+</style>

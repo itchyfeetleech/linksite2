@@ -1,0 +1,5 @@
+/.astro
+/.astro/**
+node_modules/
+dist/
+

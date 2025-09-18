@@ -2,8 +2,10 @@
   import { onDestroy, onMount } from 'svelte';
   import { crtEffects, defaultEffectsState, type CRTToggle } from '../stores/crtEffects';
   import { logger, logs } from '../lib/logger';
+  import type { PluginLoadError } from '../plugins/registry';
 
   export let open = false;
+  export let pluginErrors: PluginLoadError[] = [];
 
   type EffectsState = typeof defaultEffectsState;
 
@@ -43,6 +45,8 @@
   let showSafeArea = false;
   let showHitOutlines = false;
   let showFps = true;
+
+  let pluginErrorCount = 0;
 
   const browser = typeof window !== 'undefined';
   let mounted = false;
@@ -115,6 +119,7 @@
   }
 
   $: fpsLabel = fps > 0 ? Math.round(fps).toString() : '--';
+  $: pluginErrorCount = pluginErrors.length;
 
   const shouldIgnoreKeyTarget = (target: EventTarget | null) => {
     if (!(target instanceof HTMLElement)) {
@@ -354,6 +359,32 @@
       </div>
 
       <div class="debug-section">
+        <h3>Plugins</h3>
+        {#if pluginErrorCount === 0}
+          <p class="debug-empty">All plugin manifests loaded successfully.</p>
+        {:else}
+          <p class="debug-note">Detected {pluginErrorCount} plugin {pluginErrorCount === 1 ? 'issue' : 'issues'}.</p>
+          <ul class="debug-plugin-list">
+            {#each pluginErrors as error (error.manifestPath)}
+              <li class="debug-plugin-list__item">
+                <div class="debug-plugin-list__header">
+                  <span class="debug-plugin-list__path">{error.manifestPath}</span>
+                  <span class="debug-plugin-list__summary">{error.summary}</span>
+                </div>
+                {#if error.issues.length}
+                  <ul class="debug-plugin-list__issues">
+                    {#each error.issues as issue, issueIndex (`${error.manifestPath}-${issueIndex}`)}
+                      <li>{issue}</li>
+                    {/each}
+                  </ul>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
+
+      <div class="debug-section">
         <div class="debug-section__header">
           <h3>Logs</h3>
           <button class="debug-button subtle" type="button" on:click={logger.clear}>
@@ -560,6 +591,62 @@
     letter-spacing: 0.18em;
     text-transform: uppercase;
     color: rgb(var(--accent-soft) / 0.7);
+  }
+
+  .debug-note {
+    margin: 0 0 0.6rem 0;
+    font-size: 0.65rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: rgb(var(--accent-soft) / 0.8);
+  }
+
+  .debug-plugin-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 0.6rem;
+  }
+
+  .debug-plugin-list__item {
+    border: 1px solid rgb(var(--accent) / 0.25);
+    border-radius: 0.8rem;
+    padding: 0.6rem 0.75rem;
+    background: rgb(var(--bg) / 0.35);
+    color: rgb(var(--accent-soft));
+    display: grid;
+    gap: 0.4rem;
+  }
+
+  .debug-plugin-list__header {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .debug-plugin-list__path {
+    font-size: 0.68rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    font-weight: 600;
+  }
+
+  .debug-plugin-list__summary {
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: rgb(var(--accent-soft) / 0.75);
+  }
+
+  .debug-plugin-list__issues {
+    margin: 0;
+    padding-left: 1rem;
+    display: grid;
+    gap: 0.25rem;
+    font-size: 0.7rem;
+    line-height: 1.4;
+    list-style: disc;
   }
 
   .debug-log {
