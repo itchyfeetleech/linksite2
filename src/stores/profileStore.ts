@@ -9,7 +9,51 @@ import {
   type ProfileTheme
 } from '../data/profileSchema';
 
-const PROFILE_ENDPOINT = '/config/profile.json';
+const EXTERNAL_URL_PATTERN = /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i;
+
+const ensureTrailingSlash = (value: string) =>
+  value.endsWith('/') ? value : `${value}/`;
+
+const basePath = (() => {
+  const base = import.meta.env.BASE_URL ?? '/';
+  if (!base || base === '') {
+    return '/';
+  }
+  return ensureTrailingSlash(base);
+})();
+
+const resolvePublicPath = (path: string) => {
+  const trimmed = path.trim();
+  const withoutPrefix = trimmed.replace(/^\.\//, '').replace(/^\/+/, '');
+  return `${basePath}${withoutPrefix}`;
+};
+
+const resolveUrl = (value: string) => {
+  const trimmed = value.trim();
+  if (trimmed === '' || trimmed.startsWith('#')) {
+    return trimmed;
+  }
+  if (EXTERNAL_URL_PATTERN.test(trimmed)) {
+    return trimmed;
+  }
+  if (trimmed.startsWith('./')) {
+    return resolvePublicPath(trimmed.slice(2));
+  }
+  if (trimmed.startsWith('/')) {
+    return resolvePublicPath(trimmed);
+  }
+  return trimmed;
+};
+
+const resolveOptionalUrl = (value?: string | null) => {
+  if (!value) {
+    return null;
+  }
+  const resolved = resolveUrl(value);
+  return resolved === '' ? null : resolved;
+};
+
+const PROFILE_ENDPOINT = resolvePublicPath('config/profile.json');
 const PROFILE_STORAGE_KEY = 'biolink-profile-cache';
 const DEFAULT_LINK_ICON = 'lucide:link-2';
 
@@ -66,6 +110,7 @@ let lastGoodSource: ProfileState['source'] = 'content';
 const ensureResolvedProfile = (profile: Profile): ResolvedProfile => {
   const links = profile.links.map((link) => ({
     ...link,
+    url: resolveUrl(link.url),
     icon: link.icon && link.icon.trim() !== '' ? link.icon : DEFAULT_LINK_ICON,
     cta: link.cta ?? false
   }));
@@ -75,10 +120,12 @@ const ensureResolvedProfile = (profile: Profile): ResolvedProfile => {
     items: section.items.map((item) => normalizeSectionItem(item))
   }));
 
+  const avatar = resolveOptionalUrl(profile.avatar);
+
   return {
     displayName: profile.displayName,
     handle: profile.handle,
-    avatar: profile.avatar,
+    avatar: avatar ?? undefined,
     bio: profile.bio,
     theme: profile.theme ?? DEFAULT_PROFILE_THEME,
     links,
@@ -101,12 +148,12 @@ const normalizeSectionItem = (item: ProfileSectionItem): ResolvedProfileSectionI
   }
 
   const icon = item.icon?.trim();
-  const href = item.href?.trim();
+  const href = resolveOptionalUrl(item.href);
 
   return {
     label: item.label,
     value: item.value?.trim() ?? null,
-    href: href && href.length > 0 ? href : null,
+    href,
     icon: icon && icon.length > 0 ? icon : null,
     badge: item.badge ?? null,
     note: item.note ?? null,
