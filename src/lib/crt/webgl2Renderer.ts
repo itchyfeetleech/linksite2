@@ -1,9 +1,17 @@
-import PicoGL from 'picogl';
 import vertSource from './shaders/crt.vert.glsl?raw';
 import fragSource from './shaders/crt.frag.glsl?raw';
 import type { CaptureFrame, CRTGpuRenderer } from './types';
 
 type PicoUniformValue = number | readonly number[];
+
+interface PicoGLModule {
+  createApp(
+    canvas: HTMLCanvasElement,
+    options: { context: WebGL2RenderingContext }
+  ): PicoApp;
+  LINEAR: number;
+  CLAMP_TO_EDGE: number;
+}
 
 interface PicoTexture {
   bind(unit: number): PicoTexture;
@@ -46,10 +54,22 @@ export class WebGl2Renderer implements CRTGpuRenderer {
   private drawCall: PicoDrawCall | null = null;
   private texture: PicoTexture | null = null;
   private canvas: HTMLCanvasElement | null = null;
+  private picoGL: PicoGLModule | null = null;
   private width = 0;
   private height = 0;
 
   async init(canvas: HTMLCanvasElement) {
+    if (!this.picoGL) {
+      const module = await import('picogl');
+      const picoGL = (module as { default?: PicoGLModule }).default ?? (module as PicoGLModule);
+      this.picoGL = picoGL;
+    }
+
+    const PicoGL = this.picoGL;
+    if (!PicoGL) {
+      throw new Error('Unable to load PicoGL');
+    }
+
     const context = canvas.getContext('webgl2', {
       alpha: true,
       antialias: false,
@@ -105,6 +125,12 @@ export class WebGl2Renderer implements CRTGpuRenderer {
 
     const needsResize = this.width !== frame.width || this.height !== frame.height;
     if (needsResize) {
+      const PicoGL = this.picoGL;
+      if (!PicoGL) {
+        frame.bitmap.close();
+        return;
+      }
+
       this.texture = this.app
         .createTexture2D(frame.width, frame.height, {
           data: null,

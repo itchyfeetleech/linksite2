@@ -93,7 +93,11 @@
   };
 
   const shouldRender = () =>
-    renderMode !== 'css' && !(effectState?.plainMode ?? false) && !document.hidden && hasTexture;
+    renderMode !== 'css' &&
+    !(effectState?.plainMode ?? false) &&
+    typeof document !== 'undefined' &&
+    !document.hidden &&
+    hasTexture;
 
   const step = (now: number) => {
     if (!running) {
@@ -149,7 +153,8 @@
     updateBadge();
     const active = renderMode !== 'css' && !(effectState?.plainMode ?? false);
     canvasHidden = !active || !hasTexture;
-    const pauseCapture = !active || document.hidden;
+    const pauseCapture =
+      !active || (typeof document !== 'undefined' ? document.hidden : true);
     domCapture?.setPaused(pauseCapture);
 
     if (!active) {
@@ -174,7 +179,7 @@
   };
 
   const handleVisibility = () => {
-    if (document.hidden) {
+    if (typeof document !== 'undefined' && document.hidden) {
       domCapture?.setPaused(true);
       stopLoop();
       return;
@@ -272,11 +277,15 @@
         updateEffectUniforms();
       }
 
-      document.addEventListener('visibilitychange', handleVisibility);
-      window.addEventListener('resize', handleResize);
+      if (typeof document !== 'undefined') {
+        document.addEventListener('visibilitychange', handleVisibility);
+      }
+      if (typeof window !== 'undefined') {
+        window.addEventListener('resize', handleResize);
+      }
 
       updateRenderState();
-      if (!document.hidden) {
+      if (typeof document !== 'undefined' && !document.hidden) {
         domCapture.captureImmediate().catch((error) => {
           logger.warn('CRT postFX initial capture failed', error);
         });
@@ -315,8 +324,12 @@
         reduceMotionQuery.removeListener(motionListener);
       }
     }
-    document.removeEventListener('visibilitychange', handleVisibility);
-    window.removeEventListener('resize', handleResize);
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', handleVisibility);
+    }
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('resize', handleResize);
+    }
   });
 </script>
 
