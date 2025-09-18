@@ -1,68 +1,34 @@
 import vertSource from './shaders/crt.vert.glsl?raw';
 import fragSource from './shaders/crt.frag.glsl?raw';
+import { encodeFloat32To16 } from './float16';
 import type { CaptureFrame, CRTGpuRenderer } from './types';
 
-type PicoUniformValue = number | readonly number[];
+import type PicoGLModule from 'picogl';
+import type { App as PicoApp, DrawCall as PicoDrawCall, Texture as PicoTexture } from 'picogl';
 
-interface PicoGLModule {
-  createApp(
-    canvas: HTMLCanvasElement,
-    options: { context: WebGL2RenderingContext }
-  ): PicoApp;
-  LINEAR: number;
-  CLAMP_TO_EDGE: number;
-}
+type TextureSource = Parameters<PicoTexture['data']>[0];
 
-interface PicoTexture {
-  bind(unit: number): PicoTexture;
-  data(source: TexImageSource): void;
-  delete(): void;
-}
-
-interface PicoDrawCall {
-  primitive(mode: number): PicoDrawCall;
-  texture(name: string, texture: PicoTexture): PicoDrawCall;
-  uniform(name: string, value: PicoUniformValue): PicoDrawCall;
-  draw(): void;
-  delete(): void;
-}
-
-interface PicoTextureOptions {
-  data: TexImageSource | ArrayBufferView | null;
-  minFilter: number;
-  magFilter: number;
-  wrapS: number;
-  wrapT: number;
-}
-
-interface PicoApp {
-  clearColor(r: number, g: number, b: number, a: number): PicoApp;
-  createProgram(vertexSource: string, fragmentSource: string): unknown;
-  createVertexArray(): unknown;
-  createTexture2D(width: number, height: number, options: PicoTextureOptions): PicoTexture;
-  createDrawCall(program: unknown, vertexArray: unknown): PicoDrawCall;
-  viewport(x: number, y: number, width: number, height: number): PicoApp;
-  clear(): void;
-  gl: WebGL2RenderingContext;
-  TRIANGLES: number;
+interface TextureSize {
+  width: number;
+  height: number;
 }
 
 export class WebGl2Renderer implements CRTGpuRenderer {
   readonly mode = 'webgl2' as const;
 
+  private picoGL: PicoGLModule | null = null;
   private app: PicoApp | null = null;
   private drawCall: PicoDrawCall | null = null;
-  private texture: PicoTexture | null = null;
+  private sceneTexture: PicoTexture | null = null;
+  private forwardLutTexture: PicoTexture | null = null;
+  private sceneSize: TextureSize | null = null;
+  private lutSize: TextureSize | null = null;
   private canvas: HTMLCanvasElement | null = null;
-  private picoGL: PicoGLModule | null = null;
-  private width = 0;
-  private height = 0;
 
   async init(canvas: HTMLCanvasElement) {
     if (!this.picoGL) {
       const module = await import('picogl');
-      const picoGL = (module as { default?: PicoGLModule }).default ?? (module as PicoGLModule);
-      this.picoGL = picoGL;
+      this.picoGL = (module as { default?: PicoGLModule }).default ?? (module as PicoGLModule);
     }
 
     const PicoGL = this.picoGL;
@@ -89,7 +55,8 @@ export class WebGl2Renderer implements CRTGpuRenderer {
 
     const program = this.app.createProgram(vertSource, fragSource);
     const vertexArray = this.app.createVertexArray();
-    this.texture = this.app
+
+    this.sceneTexture = this.app
       .createTexture2D(1, 1, {
         data: null,
         minFilter: PicoGL.LINEAR,
@@ -99,104 +66,171 @@ export class WebGl2Renderer implements CRTGpuRenderer {
       })
       .bind(0);
 
+    this.forwardLutTexture = this.app
+      .createTexture2D(1, 1, {
+        data: null,
+        internalFormat: context.RG16F,
+        type: PicoGL.HALF_FLOAT,
+        minFilter: PicoGL.LINEAR,
+        magFilter: PicoGL.LINEAR,
+        wrapS: PicoGL.CLAMP_TO_EDGE,
+        wrapT: PicoGL.CLAMP_TO_EDGE
+      })
+      .bind(1);
+
+    this.forwardLutTexture.data(new Uint16Array([0, 0]));
+
     this.drawCall = this.app
       .createDrawCall(program, vertexArray)
       .primitive(this.app.TRIANGLES)
-      .texture('uScene', this.texture)
-      .uniform('uResolution', [1, 1])
-      .uniform('uInvResolution', [1, 1])
-      .uniform('uTime', 0)
-      .uniform('uScanlineIntensity', 0)
-      .uniform('uSlotMaskIntensity', 0)
-      .uniform('uVignetteStrength', 0)
-      .uniform('uBloomIntensity', 0)
-      .uniform('uAberrationStrength', 0)
-      .uniform('uNoiseIntensity', 0)
-      .uniform('uDevicePixelRatio', 1)
-      .uniform('uBloomThreshold', 0.7)
-      .uniform('uBloomSoftness', 0.6);
+      .texture('uScene', this.sceneTexture)
+      .texture('uForwardLut', this.forwardLutTexture)
+      .uniform('uResolution', [1, 1, 1, 1])
+      .uniform('uTiming', [0, 0, 0, 0])
+      .uniform('uEffects', [0, 0, 0, 1])
+      .uniform('uBloomParams', [0.7, 0.6, 0, 0])
+      .uniform('uCssMetrics', [1, 1, 1, 1])
+      .uniform('uCursorState', [0, 0, 0, 0])
+      .uniform('uCursorMeta', [0, 1, 0, 0]);
+  }
+
+  private ensureSceneTexture(width: number, height: number) {
+    if (!this.app || !this.picoGL) {
+      return;
+    }
+
+    if (this.sceneSize && this.sceneSize.width === width && this.sceneSize.height === height) {
+      return;
+    }
+
+    this.sceneTexture?.delete();
+    this.sceneTexture = this.app
+      .createTexture2D(width, height, {
+        data: null,
+        minFilter: this.picoGL.LINEAR,
+        magFilter: this.picoGL.LINEAR,
+        wrapS: this.picoGL.CLAMP_TO_EDGE,
+        wrapT: this.picoGL.CLAMP_TO_EDGE
+      })
+      .bind(0);
+    this.drawCall?.texture('uScene', this.sceneTexture);
+    this.sceneSize = { width, height };
   }
 
   async updateTexture(frame: CaptureFrame) {
-    if (!this.app || !this.texture) {
+    if (!this.app) {
       frame.bitmap.close();
       return;
     }
 
-    const needsResize = this.width !== frame.width || this.height !== frame.height;
-    if (needsResize) {
-      const PicoGL = this.picoGL;
-      if (!PicoGL) {
-        frame.bitmap.close();
-        return;
-      }
+    this.ensureSceneTexture(frame.width, frame.height);
 
-      this.texture = this.app
-        .createTexture2D(frame.width, frame.height, {
+    if (!this.sceneTexture) {
+      frame.bitmap.close();
+      return;
+    }
+
+    const source = frame.bitmap as unknown as TextureSource;
+    this.sceneTexture.data(source);
+    frame.bitmap.close();
+  }
+
+  async updateGeometry(
+    _params: { width: number; height: number; dpr: number; k1: number; k2: number },
+    lutData?: { forward: Float32Array; inverse: Float32Array; width: number; height: number }
+  ) {
+    if (!this.app || !this.picoGL) {
+      return;
+    }
+
+    if (!lutData) {
+      return;
+    }
+
+    const { width, height, forward } = lutData;
+    const PicoGL = this.picoGL;
+    const gl = this.app.gl;
+
+    const needsResize = !this.lutSize || this.lutSize.width !== width || this.lutSize.height !== height;
+    if (needsResize) {
+      this.forwardLutTexture?.delete();
+      this.forwardLutTexture = this.app
+        .createTexture2D(width, height, {
           data: null,
+          internalFormat: gl.RG16F,
+          type: PicoGL.HALF_FLOAT,
           minFilter: PicoGL.LINEAR,
           magFilter: PicoGL.LINEAR,
           wrapS: PicoGL.CLAMP_TO_EDGE,
           wrapT: PicoGL.CLAMP_TO_EDGE
         })
-        .bind(0);
-      this.drawCall?.texture('uScene', this.texture);
-      this.width = frame.width;
-      this.height = frame.height;
+        .bind(1);
+      this.drawCall?.texture('uForwardLut', this.forwardLutTexture);
+      this.lutSize = { width, height };
     }
 
-    this.texture.data(frame.bitmap);
-    frame.bitmap.close();
-  }
-
-  render(uniforms: Float32Array) {
-    if (!this.app || !this.drawCall || !this.canvas) {
+    if (!this.forwardLutTexture) {
       return;
     }
 
-    const width = uniforms[0];
-    const height = uniforms[1];
+    const encoded = encodeFloat32To16(forward);
+    this.forwardLutTexture.data(encoded);
+  }
+
+  render(uniforms: Float32Array) {
+    if (!this.app || !this.drawCall) {
+      return;
+    }
+
+    const width = Math.max(1, Math.floor(uniforms[0]));
+    const height = Math.max(1, Math.floor(uniforms[1]));
 
     this.app.viewport(0, 0, width, height);
     this.drawCall
-      .uniform('uResolution', [uniforms[0], uniforms[1]])
-      .uniform('uInvResolution', [uniforms[2], uniforms[3]])
-      .uniform('uTime', uniforms[4])
-      .uniform('uScanlineIntensity', uniforms[5])
-      .uniform('uSlotMaskIntensity', uniforms[6])
-      .uniform('uVignetteStrength', uniforms[7])
-      .uniform('uBloomIntensity', uniforms[8])
-      .uniform('uAberrationStrength', uniforms[9])
-      .uniform('uNoiseIntensity', uniforms[10])
-      .uniform('uDevicePixelRatio', uniforms[11])
-      .uniform('uBloomThreshold', uniforms[12])
-      .uniform('uBloomSoftness', uniforms[13]);
+      .uniform('uResolution', uniforms.subarray(0, 4))
+      .uniform('uTiming', uniforms.subarray(4, 8))
+      .uniform('uEffects', uniforms.subarray(8, 12))
+      .uniform('uBloomParams', uniforms.subarray(12, 16))
+      .uniform('uCssMetrics', uniforms.subarray(16, 20))
+      .uniform('uCursorState', uniforms.subarray(20, 24))
+      .uniform('uCursorMeta', uniforms.subarray(24, 28));
 
     this.app.clear();
     this.drawCall.draw();
   }
 
-  resize(width: number, height: number) {
+  resize(width: number, height: number, cssWidth: number, cssHeight: number) {
     if (!this.canvas) {
       return;
     }
-    this.canvas.width = width;
-    this.canvas.height = height;
+
+    if (this.canvas.width !== width) {
+      this.canvas.width = width;
+    }
+    if (this.canvas.height !== height) {
+      this.canvas.height = height;
+    }
+    if (Number.isFinite(cssWidth) && cssWidth > 0) {
+      this.canvas.style.width = `${cssWidth}px`;
+    }
+    if (Number.isFinite(cssHeight) && cssHeight > 0) {
+      this.canvas.style.height = `${cssHeight}px`;
+    }
   }
 
   destroy() {
-    if (this.texture) {
-      this.texture.delete();
-      this.texture = null;
-    }
-    if (this.drawCall) {
-      this.drawCall.delete();
-      this.drawCall = null;
-    }
+    this.sceneTexture?.delete();
+    this.forwardLutTexture?.delete();
+    this.drawCall?.delete();
     if (this.app) {
       this.app.gl.getExtension('WEBGL_lose_context')?.loseContext();
-      this.app = null;
     }
+    this.sceneTexture = null;
+    this.forwardLutTexture = null;
+    this.drawCall = null;
+    this.app = null;
+    this.sceneSize = null;
+    this.lutSize = null;
     this.canvas = null;
   }
 }
@@ -206,4 +240,3 @@ export const createWebGl2Renderer = async (canvas: HTMLCanvasElement) => {
   await renderer.init(canvas);
   return renderer;
 };
-

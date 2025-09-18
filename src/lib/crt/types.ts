@@ -22,14 +22,26 @@ export interface CaptureFrame {
   dpr: number;
 }
 
-export const UNIFORM_FLOAT_COUNT = 16;
+export const UNIFORM_FLOAT_COUNT = 28;
 
 export interface CRTGpuRenderer {
   readonly mode: Exclude<CRTRenderMode, 'css'>;
   init(canvas: HTMLCanvasElement): Promise<void>;
   render(uniforms: Float32Array): void;
-  resize(width: number, height: number): void;
+  resize(width: number, height: number, cssWidth: number, cssHeight: number): void;
   updateTexture(frame: CaptureFrame): Promise<void>;
+  updateGeometry(params: {
+    width: number;
+    height: number;
+    dpr: number;
+    k1: number;
+    k2: number;
+  }, lutData?: {
+    forward: Float32Array;
+    inverse: Float32Array;
+    width: number;
+    height: number;
+  }): Promise<void>;
   destroy(): void;
 }
 
