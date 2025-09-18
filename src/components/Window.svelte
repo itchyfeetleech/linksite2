@@ -62,6 +62,15 @@
 
   let windowElement: HTMLElement | null = null;
 
+  const FOCUSABLE_SELECTORS =
+    'a[href], area[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [contenteditable]:not([contenteditable="false"]), [tabindex]:not([tabindex="-1"])';
+
+  let titleId = '';
+  let bodyId = '';
+
+  $: titleId = `${id}-title`;
+  $: bodyId = `${id}-content`;
+
   const dispatch = createEventDispatcher<{
     activate: void;
     close: void;
@@ -353,9 +362,111 @@
     dispatch('close');
   };
 
+  const isElementFocusable = (element: HTMLElement) => {
+    if (element.hasAttribute('disabled') || element.getAttribute('aria-hidden') === 'true') {
+      return false;
+    }
+
+    if (!browser) {
+      return true;
+    }
+
+    if (element.hidden) {
+      return false;
+    }
+
+    const style = window.getComputedStyle(element);
+    if (style.display === 'none' || style.visibility === 'hidden') {
+      return false;
+    }
+
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  };
+
+  const getFocusableElements = () => {
+    if (!windowElement) {
+      return [] as HTMLElement[];
+    }
+
+    const elements = Array.from(
+      windowElement.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTORS)
+    ).filter(isElementFocusable);
+
+    if (windowElement.tabIndex >= 0 && isElementFocusable(windowElement)) {
+      elements.unshift(windowElement);
+    }
+
+    return elements;
+  };
+
+  const handleFocusTrap = (event: KeyboardEvent) => {
+    if (event.key !== 'Tab') {
+      return;
+    }
+
+    const focusable = getFocusableElements();
+    if (focusable.length === 0) {
+      event.preventDefault();
+      windowElement?.focus();
+      return;
+    }
+
+    if (focusable.length === 1) {
+      event.preventDefault();
+      focusable[0].focus();
+      return;
+    }
+
+    const activeTarget = (event.target as HTMLElement | null) ?? null;
+    const currentIndex = activeTarget ? focusable.indexOf(activeTarget) : -1;
+
+    if (currentIndex === -1) {
+      event.preventDefault();
+      if (event.shiftKey) {
+        focusable[focusable.length - 1]?.focus();
+      } else {
+        focusable[0]?.focus();
+      }
+      return;
+    }
+
+    if (event.shiftKey) {
+      if (currentIndex === 0) {
+        event.preventDefault();
+        focusable[focusable.length - 1]?.focus();
+      }
+      return;
+    }
+
+    if (currentIndex === focusable.length - 1) {
+      event.preventDefault();
+      focusable[0]?.focus();
+    }
+  };
+
   const handleKeyDown = (event: KeyboardEvent) => {
     const state = $windowStore;
-    if (!state || event.defaultPrevented) {
+    if (event.defaultPrevented) {
+      return;
+    }
+
+    if (event.key === 'Tab') {
+      handleFocusTrap(event);
+      return;
+    }
+
+    if (!state || state.isClosed || state.isMinimized) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeWindow();
+      }
+      return;
+    }
+
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeWindow();
       return;
     }
 
@@ -363,84 +474,74 @@
       return;
     }
 
-    if (state.isClosed || state.isMinimized) {
-      return;
-    }
-
-    const key = event.key;
-
-    if (key.startsWith('Arrow')) {
-      event.preventDefault();
-      const baseStep = 16;
-      const fineStep = 4;
-      const coarseStep = 48;
-      const step = event.shiftKey ? fineStep : event.altKey ? coarseStep : baseStep;
-
-      if (event.ctrlKey || event.metaKey) {
-        let width = state.bounds.width;
-        let height = state.bounds.height;
-        const viewport = manager.getViewportBounds();
-        const widthMax = Math.min(state.maxWidth ?? Number.POSITIVE_INFINITY, viewport?.width ?? Number.POSITIVE_INFINITY);
-        const heightMax = Math.min(state.maxHeight ?? Number.POSITIVE_INFINITY, viewport?.height ?? Number.POSITIVE_INFINITY);
-
-        if (key === 'ArrowLeft') {
-          width = Math.max(state.minWidth, width - step);
-        } else if (key === 'ArrowRight') {
-          width = Math.min(widthMax, width + step);
-        } else if (key === 'ArrowUp') {
-          height = Math.max(state.minHeight, height - step);
-        } else if (key === 'ArrowDown') {
-          height = Math.min(heightMax, height + step);
-        }
-
-        controller?.updateState(
-          (current) => ({
-            ...current,
-            bounds: manager.clampToViewport({
-              ...current.bounds,
-              width,
-              height
-            })
-          }),
-          { persist: true, interaction: 'keyboard' }
-        );
-      } else {
-        let { x, y } = state.bounds;
-        if (key === 'ArrowLeft') {
-          x -= step;
-        } else if (key === 'ArrowRight') {
-          x += step;
-        } else if (key === 'ArrowUp') {
-          y -= step;
-        } else if (key === 'ArrowDown') {
-          y += step;
-        }
-
-        controller?.updateState(
-          (current) => ({
-            ...current,
-            bounds: manager.clampToViewport({
-              ...current.bounds,
-              x,
-              y
-            })
-          }),
-          { persist: true, interaction: 'keyboard' }
-        );
-      }
-      return;
-    }
-
-    if (key === 'Enter') {
+    if (event.key === 'Enter') {
       dispatch('activate');
       return;
     }
 
-    if (key === 'Escape') {
-      event.preventDefault();
-      closeWindow();
+    if (!event.key.startsWith('Arrow')) {
       return;
     }
+
+    event.preventDefault();
+    const baseStep = 16;
+    const fineStep = 4;
+    const coarseStep = 48;
+    const step = event.shiftKey ? fineStep : event.altKey ? coarseStep : baseStep;
+
+    if (event.ctrlKey || event.metaKey) {
+      let width = state.bounds.width;
+      let height = state.bounds.height;
+      const viewport = manager.getViewportBounds();
+      const widthMax = Math.min(state.maxWidth ?? Number.POSITIVE_INFINITY, viewport?.width ?? Number.POSITIVE_INFINITY);
+      const heightMax = Math.min(state.maxHeight ?? Number.POSITIVE_INFINITY, viewport?.height ?? Number.POSITIVE_INFINITY);
+
+      if (event.key === 'ArrowLeft') {
+        width = Math.max(state.minWidth, width - step);
+      } else if (event.key === 'ArrowRight') {
+        width = Math.min(widthMax, width + step);
+      } else if (event.key === 'ArrowUp') {
+        height = Math.max(state.minHeight, height - step);
+      } else if (event.key === 'ArrowDown') {
+        height = Math.min(heightMax, height + step);
+      }
+
+      controller?.updateState(
+        (current) => ({
+          ...current,
+          bounds: manager.clampToViewport({
+            ...current.bounds,
+            width,
+            height
+          })
+        }),
+        { persist: true, interaction: 'keyboard' }
+      );
+      return;
+    }
+
+    let { x, y } = state.bounds;
+    if (event.key === 'ArrowLeft') {
+      x -= step;
+    } else if (event.key === 'ArrowRight') {
+      x += step;
+    } else if (event.key === 'ArrowUp') {
+      y -= step;
+    } else if (event.key === 'ArrowDown') {
+      y += step;
+    }
+
+    controller?.updateState(
+      (current) => ({
+        ...current,
+        bounds: manager.clampToViewport({
+          ...current.bounds,
+          x,
+          y
+        })
+      }),
+      { persist: true, interaction: 'keyboard' }
+    );
   };
 
   const handleTitleDoubleClick = () => {
@@ -462,7 +563,8 @@
     tabindex={0}
     role="dialog"
     aria-modal="false"
-    aria-label={title}
+    aria-labelledby={titleId}
+    aria-describedby={bodyId}
     on:pointerdown={focusWindow}
     on:keydown={handleKeyDown}
   >
@@ -473,7 +575,7 @@
       role="toolbar"
       aria-label={`Window controls for ${title}`}
     >
-      <span class="title-text">{title}</span>
+      <h2 id={titleId} class="title-text">{title}</h2>
       <div class="title-actions">
         {#if minimizable}
           <button type="button" class="control-button" aria-label="Minimize window" on:click={toggleMinimize}>
@@ -497,7 +599,7 @@
         {/if}
       </div>
     </header>
-    <div class="window-body" tabindex={-1}>
+    <div class="window-body" id={bodyId} tabindex={0}>
       <slot />
     </div>
     {#if !$windowStore.isMaximized}
@@ -529,6 +631,12 @@
 
   .window:focus {
     outline: none;
+  }
+
+  .window:focus-visible {
+    outline: 3px solid rgb(var(--accent));
+    outline-offset: -1px;
+    box-shadow: 0 1.6rem 3.2rem rgb(var(--accent, 120 200 120) / 0.45);
   }
 
   .window.is-focused {
@@ -568,6 +676,7 @@
   }
 
   .title-text {
+    margin: 0;
     pointer-events: none;
     white-space: nowrap;
     overflow: hidden;
@@ -582,9 +691,9 @@
 
   .control-button {
     appearance: none;
-    border: 1px solid transparent;
-    background: rgb(var(--accent) / 0.18);
-    color: rgb(var(--accent));
+    border: 1px solid rgb(var(--accent) / 0.45);
+    background: rgb(var(--accent) / 0.28);
+    color: rgb(var(--text));
     width: 1.65rem;
     height: 1.25rem;
     border-radius: 0.45rem;
@@ -598,20 +707,21 @@
 
   .control-button:hover,
   .control-button:focus-visible {
-    background: rgb(var(--accent) / 0.3);
-    border-color: rgb(var(--accent) / 0.6);
+    background: rgb(var(--accent) / 0.4);
+    border-color: rgb(var(--accent));
     outline: none;
   }
 
   .control-button.close {
-    background: rgb(255 80 80 / 0.2);
-    color: rgb(255 140 140 / 0.9);
+    background: rgb(210 60 60 / 0.6);
+    border-color: rgb(255 160 160 / 0.75);
+    color: rgb(255 244 244);
   }
 
   .control-button.close:hover,
   .control-button.close:focus-visible {
-    background: rgb(255 80 80 / 0.35);
-    border-color: rgb(255 150 150 / 0.6);
+    background: rgb(230 88 88 / 0.75);
+    border-color: rgb(255 200 200 / 0.8);
   }
 
   .window-body {

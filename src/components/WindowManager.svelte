@@ -557,7 +557,12 @@
   setContext(WINDOW_MANAGER_CONTEXT, contextValue);
 </script>
 
-<div class="window-manager" bind:this={container}>
+<div
+  class="window-manager"
+  bind:this={container}
+  role="region"
+  aria-label="Desktop workspace"
+>
   <slot />
 </div>
 

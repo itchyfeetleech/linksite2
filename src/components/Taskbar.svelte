@@ -308,9 +308,9 @@
   };
 </script>
 
-<div
-  class="pointer-events-auto fixed bottom-[calc(0.75rem+env(safe-area-inset-bottom,0px))] left-1/2 z-50 flex w-[min(100%-1rem,64rem)] -translate-x-1/2 flex-wrap items-center gap-2 rounded-2xl border border-accent/30 bg-surface/80 px-3 py-2 text-xs text-accent backdrop-blur supports-[backdrop-filter]:bg-surface/60 sm:bottom-[calc(1rem+env(safe-area-inset-bottom,0px))] sm:w-[min(100%-1.5rem,72rem)] sm:flex-nowrap sm:gap-3"
-  role="presentation"
+<nav
+  class="pointer-events-auto fixed bottom-[calc(0.75rem+env(safe-area-inset-bottom,0px))] left-1/2 z-50 flex w-[min(100%-1rem,64rem)] -translate-x-1/2 flex-wrap items-center gap-2 rounded-2xl border border-accent/30 bg-surface/80 px-3 py-2 text-xs text-text backdrop-blur supports-[backdrop-filter]:bg-surface/60 sm:bottom-[calc(1rem+env(safe-area-inset-bottom,0px))] sm:w-[min(100%-1.5rem,72rem)] sm:flex-nowrap sm:gap-3"
+  aria-label="Desktop taskbar"
   on:pointerdown={beginLongPress}
   on:pointerup={cancelLongPress}
   on:pointercancel={cancelLongPress}
@@ -320,7 +320,7 @@
     <button
       bind:this={startButton}
       type="button"
-      class="inline-flex min-h-10 min-w-10 items-center gap-2 rounded-xl border border-transparent bg-accent/20 px-3 py-2 font-mono text-[0.7rem] uppercase tracking-[0.25em] text-accent transition hover:bg-accent/25 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:text-[0.75rem]"
+      class="inline-flex min-h-10 min-w-10 items-center gap-2 rounded-xl border border-transparent bg-accent/20 px-3 py-2 font-mono text-[0.7rem] uppercase tracking-[0.25em] text-text transition hover:bg-accent/30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:text-[0.75rem]"
       aria-haspopup="true"
       aria-expanded={startOpen}
       aria-controls={startMenuId}
@@ -347,7 +347,7 @@
   </div>
 
   <div
-    class="flex min-h-10 flex-1 items-center gap-1 overflow-x-auto rounded-xl border border-accent/25 bg-surface/70 px-2 py-1 text-[0.75rem] text-accent supports-[backdrop-filter]:bg-surface/40"
+    class="flex min-h-10 flex-1 items-center gap-1 overflow-x-auto rounded-xl border border-accent/25 bg-surface/70 px-2 py-1 text-[0.75rem] text-text supports-[backdrop-filter]:bg-surface/40"
     role="listbox"
     aria-label="Open windows"
   >
@@ -358,7 +358,7 @@
         <button
           bind:this={windowButtons[index]}
           type="button"
-          class="flex min-h-10 shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-left text-[0.75rem] transition data-[state=active]:bg-accent/30 data-[state=active]:text-accent-soft data-[state=minimized]:opacity-70 hover:bg-accent/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          class="flex min-h-10 shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-left text-[0.75rem] text-text transition data-[state=active]:bg-accent/30 data-[state=active]:text-text data-[state=minimized]:opacity-70 hover:bg-accent/25 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           role="option"
           aria-selected={win.isFocused}
           data-state={win.isFocused ? 'active' : win.isMinimized ? 'minimized' : 'inactive'}
@@ -385,7 +385,7 @@
       <span aria-hidden="true" class="font-mono text-[0.7rem] tracking-[0.15em] text-accent">--</span>
     </div>
     <time
-      class="flex h-10 items-center justify-end rounded-xl border border-accent/30 bg-accent/10 px-3 font-mono text-sm tracking-[0.2em] text-accent-soft shadow-sm supports-[backdrop-filter]:bg-accent/15"
+      class="flex h-10 items-center justify-end rounded-xl border border-accent/30 bg-accent/10 px-3 font-mono text-sm tracking-[0.2em] text-text shadow-sm supports-[backdrop-filter]:bg-accent/15"
       datetime={isoTime}
     >
       {timeLabel}
@@ -406,7 +406,7 @@
         <button
           bind:this={startMenuItems[index]}
           type="button"
-          class="flex items-start gap-3 rounded-xl border border-transparent bg-accent/10 px-3 py-2 text-left text-sm text-accent transition hover:bg-accent/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          class="flex items-start gap-3 rounded-xl border border-transparent bg-accent/10 px-3 py-2 text-left text-sm text-text transition hover:bg-accent/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           role="menuitem"
           on:click={() => launchApp(item.id)}
           on:keydown={(event) => handleStartMenuKeydown(event, index)}
@@ -421,4 +421,4 @@
     </div>
   </div>
 {/if}
-</div>
+</nav>
