@@ -1,8 +1,8 @@
 struct Uniforms {
-  resolution: vec4<f32>;
-  factorsA: vec4<f32>;
-  factorsB: vec4<f32>;
-  factorsC: vec4<f32>;
+  resolution: vec4<f32>,
+  factorsA: vec4<f32>,
+  factorsB: vec4<f32>,
+  factorsC: vec4<f32>,
 };
 
 @group(0) @binding(0) var linearSampler: sampler;
@@ -10,8 +10,8 @@ struct Uniforms {
 @group(0) @binding(2) var<uniform> uniforms: Uniforms;
 
 struct VertexOutput {
-  @builtin(position) position: vec4<f32>;
-  @location(0) uv: vec2<f32>;
+  @builtin(position) position: vec4<f32>,
+  @location(0) uv: vec2<f32>,
 };
 
 @vertex

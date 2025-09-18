@@ -137,7 +137,7 @@ export const createDomCapture = ({
         useCORS: true,
         logging: false,
         scale: dpr,
-        ignoreElements: (element) => ignorePredicate(element)
+        ignoreElements: (element: Element) => ignorePredicate(element)
       });
 
       const bitmap = await createImageBitmap(canvas);
