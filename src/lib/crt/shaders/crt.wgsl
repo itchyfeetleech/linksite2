@@ -88,6 +88,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
   if (bloomIntensity > 0.0001) {
     var accum = vec3<f32>(0.0, 0.0, 0.0);
+    let tapCount: u32 = 5u;
     let taps = array<vec2<f32>, 5>(
       vec2<f32>(0.0, 0.0),
       vec2<f32>(invResolution.x * 2.0, 0.0),
@@ -95,11 +96,11 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
       vec2<f32>(0.0, invResolution.y * 2.0),
       vec2<f32>(0.0, -invResolution.y * 2.0)
     );
-    for (var i = 0u; i < taps.length(); i = i + 1u) {
+    for (var i = 0u; i < tapCount; i = i + 1u) {
       let sampleUv = clampUv(uv + taps[i]);
       accum = accum + textureSampleLevel(sceneTexture, linearSampler, sampleUv, 0.0).rgb;
     }
-    accum = accum / f32(taps.length());
+    accum = accum / f32(tapCount);
     let luminance = dot(accum, vec3<f32>(0.2126, 0.7152, 0.0722));
     let weight = smoothstep(bloomThreshold, 1.0, luminance);
     color = mix(color, accum, weight * bloomIntensity * bloomSoftness);
