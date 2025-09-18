@@ -50,6 +50,19 @@ GitHub Actions workflows live in `.github/workflows/`:
 - `ci.yml` covers linting, type checking, unit tests, and Playwright.
 - `pages.yml` builds and deploys to GitHub Pages.
 
+## CRT rendering pipeline
+
+The screen simulation now renders through a dedicated `<CRTPostFX>` overlay. The component captures the DOM with `html2canvas`,
+uploads the frame to WebGPU (or WebGL2 via PicoGL), and applies scanlines, slot mask, vignette, noise, and optional bloom in
+real time. Pointer events remain routed to the underlying DOM, so links and controls behave identically to the unprocessed view.
+
+- Mode detection prefers WebGPU, falls back to WebGL2, then gracefully disables the GPU canvas and reuses the existing CSS/SVG
+  overlays when neither API is available.
+- Capture frequency throttles automatically and honours `prefers-reduced-motion`, capping the render loop to 30 FPS and
+  disabling temporal noise for motion-sensitive users or hidden tabs.
+- All CRT toggles live in a single Svelte store, which feeds uniforms for the shaders or CSS custom properties. The Debug
+  overlay now surfaces the active render mode and exposes the same controls regardless of backend.
+
 ## Plugin system
 
 Desktop apps can now be extended via JSON manifests and Svelte modules. Drop files into `public/plugins/` and `src/plugins/` and they appear in the faux taskbar automatically. See [docs/plugins.md](docs/plugins.md) for the schema, sandbox contract, and sample implementations.

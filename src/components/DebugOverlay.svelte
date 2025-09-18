@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { crtEffects, defaultEffectsState, type CRTToggle } from '../stores/crtEffects';
+  import { crtEffects, crtRenderMode, defaultEffectsState, type CRTToggle } from '../stores/crtEffects';
   import { logger, logs } from '../lib/logger';
   import type { PluginLoadError } from '../plugins/registry';
 
@@ -8,6 +8,12 @@
   export let pluginErrors: PluginLoadError[] = [];
 
   type EffectsState = typeof defaultEffectsState;
+
+  const MODE_LABELS: Record<string, string> = {
+    webgpu: 'WebGPU',
+    webgl2: 'WebGL2',
+    css: 'CSS fallback'
+  };
 
   const effectLabels: Record<CRTToggle, string> = {
     scanlines: 'Scanlines',
@@ -37,6 +43,9 @@
 
   let state: EffectsState = cloneState();
   $: state = $crtEffects;
+  let renderMode = 'css';
+  $: renderMode = $crtRenderMode;
+  let renderModeLabel = MODE_LABELS[renderMode] ?? renderMode;
 
   let adjustmentsDisabled = Boolean(state?.plainMode);
   $: adjustmentsDisabled = Boolean(state?.plainMode);
@@ -290,6 +299,7 @@
         <h2>Debug Overlay</h2>
         <div class="debug-panel__meta">
           <span class="debug-panel__fps">Live FPS: {fpsLabel}</span>
+          <span class="debug-panel__mode">Mode: {renderModeLabel}</span>
           <button type="button" class="debug-button subtle" on:click={() => (open = false)}>
             Close
           </button>
@@ -472,6 +482,10 @@
 
   .debug-panel__fps {
     color: rgb(var(--accent-soft));
+  }
+
+  .debug-panel__mode {
+    color: rgb(var(--accent));
   }
 
   .debug-section {

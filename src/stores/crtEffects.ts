@@ -1,4 +1,5 @@
 import { writable } from 'svelte/store';
+import type { CRTRenderMode } from '../lib/crt/types';
 
 export type CRTTheme = 'green' | 'amber';
 export type CRTToggle = 'scanlines' | 'glow' | 'aberration' | 'barrel';
@@ -41,7 +42,7 @@ const hasWindow = typeof window !== 'undefined';
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
-const applyDocumentEffects = (state: CRTEffectsState) => {
+const applyDocumentEffects = (state: CRTEffectsState, mode: CRTRenderMode) => {
   if (!hasWindow) {
     return;
   }
@@ -55,10 +56,12 @@ const applyDocumentEffects = (state: CRTEffectsState) => {
     delete root.dataset.mode;
   }
 
-  const scanlineValue = state.plainMode || !state.scanlines ? 0 : state.intensity.scanlines;
-  const glowValue = state.plainMode || !state.glow ? 0 : state.intensity.glow;
-  const aberrationValue = state.plainMode || !state.aberration ? 0 : state.intensity.aberration;
-  const barrelValue = state.plainMode || !state.barrel ? 0 : state.intensity.barrel;
+  const cssEnabled = mode === 'css';
+
+  const scanlineValue = !cssEnabled || state.plainMode || !state.scanlines ? 0 : state.intensity.scanlines;
+  const glowValue = !cssEnabled || state.plainMode || !state.glow ? 0 : state.intensity.glow;
+  const aberrationValue = !cssEnabled || state.plainMode || !state.aberration ? 0 : state.intensity.aberration;
+  const barrelValue = !cssEnabled || state.plainMode || !state.barrel ? 0 : state.intensity.barrel;
 
   root.style.setProperty('--scanline-opacity', scanlineValue.toString());
   root.style.setProperty('--glow-strength', glowValue.toString());
@@ -103,12 +106,17 @@ const readPersistedState = (): CRTEffectsState => {
 const initializeState = readPersistedState();
 
 const baseWritable = writable<CRTEffectsState>(initializeState);
+const renderModeWritable = writable<CRTRenderMode>('css');
+
+let currentMode: CRTRenderMode = 'css';
+let latestState = initializeState;
 
 if (hasWindow) {
-  applyDocumentEffects(initializeState);
+  applyDocumentEffects(initializeState, currentMode);
 
   baseWritable.subscribe((value) => {
-    applyDocumentEffects(value);
+    latestState = value;
+    applyDocumentEffects(value, currentMode);
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
   });
 }
@@ -151,13 +159,21 @@ const reset = () => {
   });
 };
 
+const setRenderMode = (mode: CRTRenderMode) => {
+  currentMode = mode;
+  renderModeWritable.set(mode);
+  applyDocumentEffects(latestState, currentMode);
+};
+
 export const crtEffects = {
   subscribe: baseWritable.subscribe,
   setTheme,
   togglePlainMode,
   toggleEffect,
   setIntensity,
-  reset
+  reset,
+  setRenderMode
 };
 
 export { DEFAULT_STATE as defaultEffectsState };
+export const crtRenderMode = { subscribe: renderModeWritable.subscribe };
