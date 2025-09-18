@@ -5,6 +5,8 @@
   import LinksApp from './LinksApp.svelte';
   import Taskbar from './Taskbar.svelte';
   import DebugOverlay from './DebugOverlay.svelte';
+  import PluginWindow from './PluginWindow.svelte';
+  import { pluginDefinitions, pluginLoadErrors } from '../plugins/registry';
   import type { Profile } from '../data/profileSchema';
   import {
     initializeProfileStore,
@@ -31,6 +33,9 @@
   const schemaVersion = 1;
 
   const store = profileStore;
+
+  const plugins = pluginDefinitions;
+  const pluginErrors = pluginLoadErrors;
 
   const SOURCE_LABELS: Record<ProfileState['source'], string> = {
     json: 'Live profile config',
@@ -113,6 +118,12 @@
       preview: import.meta.env.PREVIEW ?? false,
       ssr: import.meta.env.SSR
     });
+
+    if (pluginErrors.length) {
+      pluginErrors.forEach((error) => {
+        logger.error('Plugin manifest failed to load', error);
+      });
+    }
   });
 
   const formatSectionItem = (item: ResolvedProfileSectionItem) => {
@@ -242,10 +253,18 @@
     </div>
   </Window>
 
-  <Taskbar linksWindowId="links" on:longpress={() => (debugOverlayOpen = !debugOverlayOpen)} />
+  {#each plugins as plugin (plugin.id)}
+    <PluginWindow {plugin} />
+  {/each}
+
+  <Taskbar
+    linksWindowId="links"
+    {plugins}
+    on:longpress={() => (debugOverlayOpen = !debugOverlayOpen)}
+  />
 </WindowManager>
 
-<DebugOverlay bind:open={debugOverlayOpen} />
+<DebugOverlay bind:open={debugOverlayOpen} {pluginErrors} />
 
 <style>
   .console-content {

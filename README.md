@@ -50,6 +50,10 @@ GitHub Actions workflows live in `.github/workflows/`:
 - `ci.yml` covers linting, type checking, unit tests, and Playwright.
 - `pages.yml` builds and deploys to GitHub Pages.
 
+## Plugin system
+
+Desktop apps can now be extended via JSON manifests and Svelte modules. Drop files into `public/plugins/` and `src/plugins/` and they appear in the faux taskbar automatically. See [docs/plugins.md](docs/plugins.md) for the schema, sandbox contract, and sample implementations.
+
 ## Accessibility
 
 Playwright integrates `@axe-core/playwright` to keep the homepage free of WCAG 2.1 A/AA violations. Run `pnpm test:e2e` locally to validate before shipping.

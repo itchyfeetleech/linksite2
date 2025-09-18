@@ -19,5 +19,16 @@
         "useConst": "error"
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": [".astro/**"],
+      "linter": {
+        "enabled": false
+      },
+      "formatter": {
+        "enabled": false
+      }
+    }
+  ]
 }

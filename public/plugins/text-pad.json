@@ -1,0 +1,17 @@
+{
+  "id": "text-pad",
+  "title": "Text Pad",
+  "description": "Scratch pad for quick notes.",
+  "icon": "📝",
+  "module": "sample/TextPad.svelte",
+  "defaultBounds": {
+    "x": 540,
+    "y": 200,
+    "width": 360,
+    "height": 320
+  },
+  "minWidth": 320,
+  "minHeight": 240,
+  "pinned": true,
+  "showInStart": true
+}
