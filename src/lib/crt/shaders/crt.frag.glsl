@@ -2,7 +2,6 @@
 precision highp float;
 
 uniform sampler2D uScene;
-uniform sampler2D uForwardLut;
 uniform vec4 uResolution; // width, height, invWidth, invHeight
 uniform vec4 uTiming; // time, scanline, slotMask, vignette
 uniform vec4 uEffects; // bloom, aberration, noise, dpr
@@ -24,6 +23,16 @@ vec2 clampCss(vec2 value, vec2 size) {
 
 vec2 cssToSceneUv(vec2 css, float dpr, vec2 invResolution) {
   return vec2(css.x * dpr * invResolution.x, css.y * dpr * invResolution.y);
+}
+
+vec2 warpSampleUv(vec2 uv, float aspect, float k1, float k2) {
+  vec2 p = uv * 2.0 - vec2(1.0);
+  p.x *= aspect;
+  float r2 = dot(p, p);
+  float scale = 1.0 + k1 * r2 + k2 * r2 * r2;
+  p *= scale;
+  p.x /= aspect;
+  return p * 0.5 + vec2(0.5);
 }
 
 float vignetteMask(vec2 css, vec2 invCss) {
@@ -56,6 +65,8 @@ void main() {
   float devicePixelRatio = uEffects.w;
   float bloomThreshold = uBloomParams.x;
   float bloomSoftness = uBloomParams.y;
+  float k1 = uBloomParams.z;
+  float k2 = uBloomParams.w;
   vec2 cssSize = uCssMetrics.xy;
   vec2 invCss = uCssMetrics.zw;
   vec4 cursor = uCursorState;
@@ -63,7 +74,11 @@ void main() {
 
   float bloomIntensity = baseBloomIntensity * cursorMeta.y;
 
-  vec2 cssCoord = clampCss(texture(uForwardLut, uv).xy, cssSize);
+  float aspect = uResolution.y > 0.0 ? uResolution.x / uResolution.y : 1.0;
+  vec2 warpedUv = warpSampleUv(uv, aspect, k1, k2);
+  bool outside = warpedUv.x < 0.0 || warpedUv.x > 1.0 || warpedUv.y < 0.0 || warpedUv.y > 1.0;
+  vec2 clampedWarp = clampUv(warpedUv);
+  vec2 cssCoord = clampCss(clampedWarp * cssSize, cssSize);
   vec2 sceneUv = clampUv(cssToSceneUv(cssCoord, devicePixelRatio, invResolution));
   vec3 color = texture(uScene, sceneUv).rgb;
 
@@ -119,9 +134,10 @@ void main() {
     color = mix(color, accum, weight * bloomIntensity * bloomSoftness);
   }
 
-  if (vignetteStrength > 0.0001) {
+  float vignetteWeight = outside ? 1.0 : vignetteStrength;
+  if (vignetteWeight > 0.0001) {
     float vig = vignetteMask(cssCoord, invCss);
-    color *= mix(1.0, vig, vignetteStrength);
+    color *= mix(1.0, vig, clamp(vignetteWeight, 0.0, 1.0));
   }
 
   if (noiseIntensity > 0.0001) {

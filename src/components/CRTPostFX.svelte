@@ -17,9 +17,8 @@
     type EventProxyController,
     type PointerActivityState
   } from '../lib/crt/eventProxy';
-  import { createLutController } from '../lib/crt/lutController';
   import type { CRTGpuRenderer, CRTRenderMode } from '../lib/crt/types';
-  import { sampleLut, type LutResult } from '../lib/crt/geometryMath';
+  import { mapDomToScreen } from '../lib/crt/geometryMath';
   import { UNIFORM_FLOAT_COUNT } from '../lib/crt/types';
   import { createCoordSpace } from '../lib/crt/coordSpace';
 
@@ -61,9 +60,6 @@
   let renderer: CRTGpuRenderer | null = null;
   let domCapture: DomCaptureController | null = null;
   let eventProxy: EventProxyController | null = null;
-  const lutController = createLutController();
-  let currentLut: LutResult | null = null;
-
   const uniforms = new Float32Array(UNIFORM_FLOAT_COUNT);
 
   let reduceMotion = false;
@@ -80,8 +76,6 @@
   let cssHeight = coordSnapshot.cssHeight;
 
   let pointerDown = false;
-  let lutFilterLinear = 0;
-
   let toastMessage: string | null = null;
   let toastTimer = 0;
 
@@ -100,9 +94,15 @@
   let pendingModeCheck = false;
   let destroyed = false;
 
+  let warpMode = 'shader';
+  if (typeof document !== 'undefined') {
+    const declared = document.documentElement.dataset.crtWarpMode;
+    if (declared) {
+      warpMode = declared;
+    }
+  }
+
   const geometryParams = { width: cssWidth, height: cssHeight, dpr, k1: 0, k2: 0 };
-  let geometryRevision = 0;
-  let geometryDirty = true;
 
   const matrixHash = (matrix: Float32Array) => {
     let hash = 2166136261 >>> 0;
@@ -227,56 +227,19 @@
     let k1 = 0;
     let k2 = 0;
     if (enabled) {
-      const intensity = state?.intensity.barrel ?? 0;
-      const curvature = Math.min(1.25, intensity * 260);
-      k1 = -0.22 * curvature;
-      k2 = -0.09 * curvature * curvature;
+      const slider = Math.max(-1, Math.min(1, state?.intensity.barrel ?? 0));
+      k1 = slider * 0.035;
+      k2 = slider * 0.012;
+      if (Math.abs(k1) > 0.05 || Math.abs(k2) > 0.02) {
+        logger.warn('CRT postFX barrel coefficients out of range; resetting', { slider, k1, k2 });
+        k1 = 0;
+        k2 = 0;
+      }
     }
     geometryParams.k1 = k1;
     geometryParams.k2 = k2;
     uniforms[BLOOM_OFFSET + 2] = k1;
     uniforms[BLOOM_OFFSET + 3] = k2;
-  };
-
-  const scheduleGeometryUpdate = () => {
-    if (!renderer || renderMode === 'css') {
-      geometryDirty = true;
-      return;
-    }
-    geometryDirty = false;
-    const params = { ...geometryParams };
-    const version = ++geometryRevision;
-
-    const run = async () => {
-      try {
-        if (!renderer) {
-          return;
-        }
-        if (renderer.mode === 'webgl2') {
-          const lut = await lutController.request(params);
-          if (geometryRevision !== version || !renderer || renderer.mode !== 'webgl2') {
-            return;
-          }
-          currentLut = lut;
-          eventProxy?.updateLut(lut);
-          await renderer.updateGeometry(params, lut);
-        } else {
-          await renderer.updateGeometry(params);
-          const lut = await lutController.request(params);
-          if (geometryRevision !== version) {
-            return;
-          }
-          currentLut = lut;
-          eventProxy?.updateLut(lut);
-        }
-      } catch (error) {
-        if (!destroyed) {
-          logger.warn('CRT postFX LUT update failed', error);
-        }
-      }
-    };
-
-    void run();
   };
 
   const updateEffectUniforms = () => {
@@ -303,10 +266,7 @@
     uniforms[BLOOM_OFFSET + 1] = softness;
 
     applyBarrelCoefficients();
-    geometryDirty = true;
-    if (renderer && renderMode !== 'css') {
-      scheduleGeometryUpdate();
-    }
+    void renderer?.updateGeometry(geometryParams);
     updateBadge();
   };
 
@@ -347,7 +307,7 @@
     geometryParams.dpr = dpr;
 
     renderer?.resize(coordSnapshot.textureWidth, coordSnapshot.textureHeight, cssWidth, cssHeight);
-    geometryDirty = true;
+    void renderer?.updateGeometry(geometryParams);
     updateOrientationInfo();
     logOrientationState('resize');
   };
@@ -483,14 +443,9 @@
   };
 
   const handleCursorUpdate = (state: CursorState) => {
-    let cursorCssX = state.domX;
-    let cursorCssY = state.domY;
-    const lut = currentLut;
-    if (lut && lut.forward && lut.width > 0 && lut.height > 0) {
-      const warped = sampleLut(lut.forward, lut.width, lut.height, state.uvX, state.uvY);
-      cursorCssX = warped.x;
-      cursorCssY = warped.y;
-    }
+    const mapped = mapDomToScreen(state.domX, state.domY, geometryParams);
+    let cursorCssX = mapped.x;
+    let cursorCssY = mapped.y;
     uniforms[CURSOR_STATE_OFFSET + 0] = cursorCssX;
     uniforms[CURSOR_STATE_OFFSET + 1] = cursorCssY;
     uniforms[CURSOR_STATE_OFFSET + 2] = state.visible ? 1 : 0;
@@ -543,16 +498,13 @@
       geometryParams.dpr = dpr;
 
       renderer.resize(coordSnapshot.textureWidth, coordSnapshot.textureHeight, cssWidth, cssHeight);
-      geometryDirty = true;
+      void renderer.updateGeometry(geometryParams);
       updateOrientationInfo();
       logOrientationState('capture');
 
       updateRenderState();
       if (shouldRender()) {
         startLoop();
-      }
-      if (geometryDirty) {
-        scheduleGeometryUpdate();
       }
     } catch (error) {
       frame.bitmap.close();
@@ -562,7 +514,6 @@
 
   const handleResize = () => {
     updateCanvasSize();
-    scheduleGeometryUpdate();
     domCapture?.trigger();
   };
 
@@ -587,11 +538,7 @@
     renderer?.destroy();
     renderer = null;
     hasTexture = false;
-    currentLut = null;
-    geometryRevision += 1;
-    geometryDirty = true;
     pointerDown = false;
-    lutFilterLinear = 0;
     uniforms[CURSOR_STATE_OFFSET + 2] = 0;
     uniforms[CURSOR_META_OFFSET + 1] = 1;
     uniforms[CURSOR_META_OFFSET + 2] = 0;
@@ -608,31 +555,20 @@
     teardownGpu();
 
     renderer = mode === 'webgpu' ? await createWebGpuRenderer(canvas) : await createWebGl2Renderer(canvas);
-    const capabilities = renderer.getCapabilities();
-    lutFilterLinear = capabilities.linearHalfFloatLut ? 1 : 0;
-    uniforms[CURSOR_META_OFFSET + 2] = lutFilterLinear;
     renderMode = mode;
     hasTexture = false;
 
     updateCanvasSize();
     updateEffectUniforms();
-    scheduleGeometryUpdate();
 
     eventProxy = createEventProxy({
       canvas,
-      getLut: () =>
-        currentLut
-          ? { width: currentLut.width, height: currentLut.height, data: currentLut.inverse }
-          : null,
+      getWarpParams: () => geometryParams,
       getCoordSpace: () => coordSnapshot,
       onCursor: handleCursorUpdate,
       onActivity: handlePointerActivity,
       logLatency: (value) => logProxyLatency(value)
     });
-
-    if (currentLut) {
-      eventProxy.updateLut(currentLut);
-    }
 
     domCapture = createDomCapture({
       root: document.documentElement,
@@ -684,9 +620,6 @@
 
   const switchToMode = async (target: CRTRenderMode) => {
     if (target === renderMode) {
-      if (geometryDirty && renderer && renderMode !== 'css') {
-        scheduleGeometryUpdate();
-      }
       updateRenderState();
       return;
     }
@@ -702,11 +635,22 @@
       return;
     }
 
+    if (target !== 'css' && warpMode !== 'shader') {
+      showToast(`GPU disabled: warp mode "${warpMode}"`);
+      teardownGpu();
+      renderMode = 'css';
+      crtEffects.setRenderMode('css');
+      canvasHidden = true;
+      updateOrientationInfo();
+      logOrientationState('warp-fallback');
+      updateRenderState();
+      return;
+    }
+
     try {
       await initializeGpu(target);
       crtEffects.setRenderMode(target);
       logger.info('CRT postFX renderer ready', { mode: target });
-      scheduleGeometryUpdate();
     } catch (error) {
       logger.error('CRT postFX failed to enable GPU mode', error);
       const reason = error instanceof Error ? error.message : String(error);
@@ -727,7 +671,7 @@
       return;
     }
     const target = chooseMode(requestedPreference);
-    if (target === renderMode && !(geometryDirty && renderer && renderMode !== 'css')) {
+    if (target === renderMode) {
       updateRenderState();
       return;
     }
@@ -810,7 +754,7 @@
     setVec4(BLOOM_OFFSET, 0.7, 0.6, 0, 0);
     setVec4(CSS_OFFSET, 1, 1, 1, 1);
     setVec4(CURSOR_STATE_OFFSET, 0, 0, 0, 0);
-    setVec4(CURSOR_META_OFFSET, 0, 1, lutFilterLinear, 0);
+    setVec4(CURSOR_META_OFFSET, 0, 1, 0, 0);
 
     const unsubscribe = crtEffects.subscribe((value) => {
       effectState = value;
@@ -856,7 +800,6 @@
   onDestroy(() => {
     destroyed = true;
     teardownGpu();
-    lutController.dispose();
     if (reduceMotionQuery && motionListener) {
       if ('removeEventListener' in reduceMotionQuery) {
         reduceMotionQuery.removeEventListener('change', motionListener);

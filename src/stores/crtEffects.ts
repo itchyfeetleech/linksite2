@@ -37,7 +37,7 @@ const DEFAULT_STATE: CRTEffectsState = {
     scanlines: 0.18,
     glow: 0.55,
     aberration: 0.35,
-    barrel: 0.0025
+    barrel: 0
   },
   modePreference: 'auto'
 };
@@ -69,7 +69,9 @@ const applyDocumentEffects = (state: CRTEffectsState, mode: CRTRenderMode) => {
       ? state.intensity.glow
       : 0.08;
   const aberrationValue = !cssEnabled || state.plainMode || !state.aberration ? 0 : state.intensity.aberration;
-  const barrelValue = !cssEnabled || state.plainMode || !state.barrel ? 0 : state.intensity.barrel;
+  const barrelValue = !cssEnabled || state.plainMode || !state.barrel
+    ? 0
+    : Math.min(1, Math.abs(state.intensity.barrel));
 
   root.style.setProperty('--scanline-opacity', scanlineValue.toString());
   root.style.setProperty('--glow-strength', glowValue.toString());
@@ -102,7 +104,7 @@ const readPersistedState = (): CRTEffectsState => {
     next.intensity.scanlines = clamp(next.intensity.scanlines, 0, 1);
     next.intensity.glow = clamp(next.intensity.glow, 0, 1);
     next.intensity.aberration = clamp(next.intensity.aberration, 0, 1);
-    next.intensity.barrel = clamp(next.intensity.barrel, 0, 0.01);
+    next.intensity.barrel = clamp(next.intensity.barrel, -1, 1);
 
     if (next.modePreference !== 'webgpu' && next.modePreference !== 'webgl2' && next.modePreference !== 'css') {
       next.modePreference = 'auto';
@@ -159,7 +161,7 @@ const setIntensity = (key: CRTToggle, value: number) => {
     ...state,
     intensity: {
       ...state.intensity,
-      [key]: key === 'barrel' ? clamp(value, 0, 0.01) : clamp(value, 0, 1)
+      [key]: key === 'barrel' ? clamp(value, -1, 1) : clamp(value, 0, 1)
     }
   }));
 };
