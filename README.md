@@ -66,6 +66,13 @@ real time. Pointer events remain routed to the underlying DOM, so links and cont
   flips UVs in the vertex stage while WebGL2 relies on `UNPACK_FLIP_Y_WEBGL`. The Orientation panel in `<CRTPostFX>` previews
   the matrices, DPR, and flip flags alongside a numbered checkerboard to verify top/bottom/left/right alignment after resizes
   or DPR changes.
+- LUT generation now writes to `rgba16float` textures for both forward and inverse maps. WebGPU enables linear sampling only
+  when the adapter advertises float16 filtering, otherwise the fragment shader falls back to a manual four-tap bilinear lookup.
+  The same RGBA16F packing feeds the PicoGL fallback through `OES_texture_half_float` so both pipelines agree on the data
+  layout.
+- Pointer events are proxied through a guarded dispatcher that ignores untrusted events, tracks active pointer IDs to avoid
+  reentrancy, and performs microtask-based hit-tests (temporarily disabling canvas pointer events) before redispatching to the
+  underlying DOM. Synthetic wheel/mouse events inherit the same guard to prevent recursive bubbling loops.
 
 ## Plugin system
 

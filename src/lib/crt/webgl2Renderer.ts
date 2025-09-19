@@ -1,7 +1,7 @@
 import vertSource from './shaders/crt.vert.glsl?raw';
 import fragSource from './shaders/crt.frag.glsl?raw';
 import { encodeFloat32To16 } from './float16';
-import type { CaptureFrame, CRTGpuRenderer } from './types';
+import type { CaptureFrame, CRTGpuRenderer, RendererCapabilities } from './types';
 
 import type PicoGLModule from 'picogl';
 import type { App as PicoApp, DrawCall as PicoDrawCall, Texture as PicoTexture } from 'picogl';
@@ -24,6 +24,10 @@ export class WebGl2Renderer implements CRTGpuRenderer {
   private sceneSize: TextureSize | null = null;
   private lutSize: TextureSize | null = null;
   private canvas: HTMLCanvasElement | null = null;
+
+  getCapabilities(): RendererCapabilities {
+    return { linearHalfFloatLut: true } satisfies RendererCapabilities;
+  }
 
   async init(canvas: HTMLCanvasElement) {
     if (!this.picoGL) {
@@ -69,7 +73,8 @@ export class WebGl2Renderer implements CRTGpuRenderer {
     this.forwardLutTexture = this.app
       .createTexture2D(1, 1, {
         data: null,
-        internalFormat: context.RG16F,
+        internalFormat: context.RGBA16F,
+        format: context.RGBA,
         type: PicoGL.HALF_FLOAT,
         minFilter: PicoGL.LINEAR,
         magFilter: PicoGL.LINEAR,
@@ -78,7 +83,7 @@ export class WebGl2Renderer implements CRTGpuRenderer {
       })
       .bind(1);
 
-    this.forwardLutTexture.data(new Uint16Array([0, 0]));
+    this.forwardLutTexture.data(new Uint16Array([0, 0, 0, 0]));
 
     this.drawCall = this.app
       .createDrawCall(program, vertexArray)
@@ -160,7 +165,8 @@ export class WebGl2Renderer implements CRTGpuRenderer {
       this.forwardLutTexture = this.app
         .createTexture2D(width, height, {
           data: null,
-          internalFormat: gl.RG16F,
+          internalFormat: gl.RGBA16F,
+          format: gl.RGBA,
           type: PicoGL.HALF_FLOAT,
           minFilter: PicoGL.LINEAR,
           magFilter: PicoGL.LINEAR,
@@ -176,8 +182,18 @@ export class WebGl2Renderer implements CRTGpuRenderer {
       return;
     }
 
-    const encoded = encodeFloat32To16(forward);
+    const packed = new Float32Array(width * height * 4);
+    for (let i = 0, j = 0; i < forward.length; i += 2, j += 4) {
+      packed[j] = forward[i];
+      packed[j + 1] = forward[i + 1];
+      packed[j + 2] = 0;
+      packed[j + 3] = 1;
+    }
+
+    const encoded = encodeFloat32To16(packed);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
     this.forwardLutTexture.data(encoded);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
   }
 
   render(uniforms: Float32Array) {

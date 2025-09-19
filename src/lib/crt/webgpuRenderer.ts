@@ -1,7 +1,8 @@
 import lutShaderSource from './shaders/crtLut.wgsl?raw';
 import shaderSource from './shaders/crt.wgsl?raw';
-import type { CaptureFrame, CRTGpuRenderer } from './types';
+import type { CaptureFrame, CRTGpuRenderer, RendererCapabilities } from './types';
 import { UNIFORM_FLOAT_COUNT } from './types';
+import { logger } from '../logger';
 
 interface TextureSize {
   width: number;
@@ -9,6 +10,8 @@ interface TextureSize {
 }
 
 const LUT_WORKGROUP_SIZE = 8;
+const FLOAT16_FILTERABLE_FEATURE = 'float16-filterable' as GPUFeatureName;
+const FLOAT32_FILTERABLE_FEATURE = 'float32-filterable' as GPUFeatureName;
 
 export class WebGpuRenderer implements CRTGpuRenderer {
   readonly mode = 'webgpu' as const;
@@ -22,6 +25,10 @@ export class WebGpuRenderer implements CRTGpuRenderer {
   private geometryUniformBuffer: GPUBuffer | null = null;
   private bindGroup: GPUBindGroup | null = null;
   private computeBindGroup: GPUBindGroup | null = null;
+  private renderBindGroupLayout: GPUBindGroupLayout | null = null;
+  private computeBindGroupLayout: GPUBindGroupLayout | null = null;
+  private renderPipelineLayout: GPUPipelineLayout | null = null;
+  private computePipelineLayout: GPUPipelineLayout | null = null;
   private sceneTexture: GPUTexture | null = null;
   private sceneTextureSize: TextureSize | null = null;
   private forwardLutTexture: GPUTexture | null = null;
@@ -30,6 +37,86 @@ export class WebGpuRenderer implements CRTGpuRenderer {
   private canvas: HTMLCanvasElement | null = null;
   private format: GPUTextureFormat | null = null;
   private geometryUniforms = new Float32Array(8);
+  private halfFloatFilterable = false;
+
+  getCapabilities(): RendererCapabilities {
+    return {
+      linearHalfFloatLut: this.halfFloatFilterable
+    } satisfies RendererCapabilities;
+  }
+
+  private async runWgslSelfTest(device: GPUDevice) {
+    const vertexModule = device.createShaderModule({
+      label: 'crt-selftest-vertex',
+      code: `@vertex fn vs_self_test() -> @builtin(position) vec4<f32> {
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+      }`
+    });
+
+    const fragmentModule = device.createShaderModule({
+      label: 'crt-selftest-fragment',
+      code: `@fragment fn fs_self_test() -> @location(0) vec4<f32> {
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+      }`
+    });
+
+    const computeModule = device.createShaderModule({
+      label: 'crt-selftest-compute',
+      code: `@compute @workgroup_size(1, 1, 1) fn cs_self_test() {}`
+    });
+
+    try {
+      const infos = await Promise.all([
+        vertexModule.compilationInfo(),
+        fragmentModule.compilationInfo(),
+        computeModule.compilationInfo()
+      ]);
+      const errors = infos.flatMap((info) =>
+        info.messages.filter((message) => message.type === 'error')
+      );
+      if (errors.length > 0) {
+        logger.warn('CRT WebGPU WGSL self-test reported errors', errors);
+      } else {
+        logger.info('CRT WebGPU WGSL self-test passed');
+      }
+    } catch (error) {
+      logger.warn('CRT WebGPU WGSL self-test failed', error);
+    }
+  }
+
+  private async validateShaderModule(module: GPUShaderModule, label: string, source: string) {
+    try {
+      const info = await module.compilationInfo();
+      const errors = info.messages.filter((message) => message.type === 'error');
+      if (errors.length === 0) {
+        return;
+      }
+
+      errors.forEach((message) => {
+        const lines = source.split('\n');
+        const line = message.lineNum ?? 0;
+        const start = Math.max(0, line - 2);
+        const end = Math.min(lines.length, line + 1);
+        const snippet = lines.slice(start, end).join('\n');
+        logger.error('CRT WebGPU shader compilation error', {
+          label,
+          line: message.lineNum,
+          column: message.linePos,
+          message: message.message,
+          snippet
+        });
+      });
+
+      throw new Error(`${label} failed to compile`);
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('failed to compile')) {
+        throw error;
+      }
+      const wrapped = new Error(`${label} validation failed`);
+      (wrapped as { cause?: unknown }).cause = error;
+      throw wrapped;
+    }
+  }
 
   async init(canvas: HTMLCanvasElement) {
     if (!navigator.gpu) {
@@ -41,92 +128,206 @@ export class WebGpuRenderer implements CRTGpuRenderer {
       throw new Error('WebGPU adapter not found');
     }
 
-    this.device = await adapter.requestDevice();
-    this.canvas = canvas;
-    this.context = canvas.getContext('webgpu');
+    const adapterFeatures = new Set<GPUFeatureName>();
+    adapter.features.forEach((feature) => {
+      adapterFeatures.add(feature);
+    });
 
-    if (!this.context) {
-      throw new Error('Unable to create WebGPU canvas context');
+    const requestedFeatures: GPUFeatureName[] = [];
+    if (adapterFeatures.has(FLOAT16_FILTERABLE_FEATURE)) {
+      requestedFeatures.push(FLOAT16_FILTERABLE_FEATURE);
+    } else if (adapterFeatures.has(FLOAT32_FILTERABLE_FEATURE)) {
+      requestedFeatures.push(FLOAT32_FILTERABLE_FEATURE);
     }
 
+    const device = await adapter.requestDevice({
+      label: 'crt-webgpu-device',
+      requiredFeatures: requestedFeatures
+    });
+    this.device = device;
+    this.canvas = canvas;
+
+    await this.runWgslSelfTest(device);
+
+    const deviceFeatures = new Set<GPUFeatureName>();
+    device.features.forEach((feature) => {
+      deviceFeatures.add(feature);
+    });
+
+    this.halfFloatFilterable =
+      deviceFeatures.has(FLOAT16_FILTERABLE_FEATURE) ||
+      deviceFeatures.has(FLOAT32_FILTERABLE_FEATURE);
+
+    const context = canvas.getContext('webgpu');
+    if (!context) {
+      throw new Error('Unable to create WebGPU canvas context');
+    }
+    this.context = context;
+
     this.format = navigator.gpu.getPreferredCanvasFormat();
-    this.context.configure({
-      device: this.device,
+    context.configure({
+      device,
       format: this.format,
       alphaMode: 'premultiplied',
       colorSpace: 'srgb',
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_DST
     });
 
-    const device = this.device;
-    const module = device.createShaderModule({ code: shaderSource });
-    this.pipeline = device.createRenderPipeline({
-      layout: 'auto',
-      vertex: { module, entryPoint: 'vs_main' },
-      fragment: {
-        module,
-        entryPoint: 'fs_main',
-        targets: [
-          {
-            format: this.format
-          }
-        ]
-      }
+    const renderModule = device.createShaderModule({ label: 'crt-render-shader', code: shaderSource });
+    await this.validateShaderModule(renderModule, 'crt-render-shader', shaderSource);
+
+    const lutModule = device.createShaderModule({ label: 'crt-lut-shader', code: lutShaderSource });
+    await this.validateShaderModule(lutModule, 'crt-lut-shader', lutShaderSource);
+
+    this.renderBindGroupLayout = device.createBindGroupLayout({
+      label: 'crt-render-bind-group-layout',
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        {
+          binding: 2,
+          visibility: GPUShaderStage.FRAGMENT | GPUShaderStage.VERTEX,
+          buffer: { type: 'uniform' }
+        },
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } }
+      ]
     });
 
-    const lutModule = device.createShaderModule({ code: lutShaderSource });
-    this.computePipeline = device.createComputePipeline({
-      layout: 'auto',
-      compute: { module: lutModule, entryPoint: 'cs_main' }
+    this.computeBindGroupLayout = device.createBindGroupLayout({
+      label: 'crt-lut-bind-group-layout',
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+        {
+          binding: 1,
+          visibility: GPUShaderStage.COMPUTE,
+          storageTexture: { access: 'write-only', format: 'rgba16float' }
+        },
+        {
+          binding: 2,
+          visibility: GPUShaderStage.COMPUTE,
+          storageTexture: { access: 'write-only', format: 'rgba16float' }
+        }
+      ]
     });
+
+    this.renderPipelineLayout = device.createPipelineLayout({
+      label: 'crt-render-pipeline-layout',
+      bindGroupLayouts: [this.renderBindGroupLayout]
+    });
+
+    this.computePipelineLayout = device.createPipelineLayout({
+      label: 'crt-lut-pipeline-layout',
+      bindGroupLayouts: [this.computeBindGroupLayout]
+    });
+
+    const format = this.format;
+    if (!format) {
+      throw new Error('Unable to determine canvas format');
+    }
+
+    const renderLayout = this.renderPipelineLayout;
+    if (!renderLayout) {
+      throw new Error('Render pipeline layout unavailable');
+    }
+
+    try {
+      this.pipeline = device.createRenderPipeline({
+        label: 'crt-render-pipeline',
+        layout: renderLayout,
+        vertex: { module: renderModule, entryPoint: 'vs_main' },
+        fragment: {
+          module: renderModule,
+          entryPoint: 'fs_main',
+          targets: [
+            {
+              format
+            }
+          ]
+        }
+      });
+    } catch (error) {
+      logger.error('CRT WebGPU render pipeline creation failed', error);
+      const wrapped = new Error('WebGPU render pipeline creation failed');
+      (wrapped as { cause?: unknown }).cause = error;
+      throw wrapped;
+    }
+
+    const computeLayout = this.computePipelineLayout;
+    if (!computeLayout) {
+      throw new Error('Compute pipeline layout unavailable');
+    }
+
+    try {
+      this.computePipeline = device.createComputePipeline({
+        label: 'crt-lut-pipeline',
+        layout: computeLayout,
+        compute: { module: lutModule, entryPoint: 'cs_main' }
+      });
+    } catch (error) {
+      logger.error('CRT WebGPU compute pipeline creation failed', error);
+      const wrapped = new Error('WebGPU compute pipeline creation failed');
+      (wrapped as { cause?: unknown }).cause = error;
+      throw wrapped;
+    }
 
     this.uniformBuffer = device.createBuffer({
+      label: 'crt-uniform-buffer',
       size: UNIFORM_FLOAT_COUNT * Float32Array.BYTES_PER_ELEMENT,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
     });
 
     this.geometryUniformBuffer = device.createBuffer({
+      label: 'crt-lut-uniform-buffer',
       size: this.geometryUniforms.byteLength,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
     });
 
     this.sampler = device.createSampler({
+      label: 'crt-main-sampler',
       magFilter: 'linear',
       minFilter: 'linear',
       addressModeU: 'clamp-to-edge',
       addressModeV: 'clamp-to-edge'
     });
+
+    logger.info('CRT WebGPU renderer initialised', {
+      format,
+      halfFloatFilterable: this.halfFloatFilterable,
+      adapterFeatures: Array.from(adapterFeatures).sort(),
+      deviceFeatures: Array.from(deviceFeatures).sort(),
+      requestedFeatures: requestedFeatures.slice()
+    });
   }
 
   private updateRenderBindGroup() {
-    if (!this.device || !this.pipeline || !this.uniformBuffer || !this.sampler || !this.sceneTexture || !this.forwardLutTexture) {
+    if (!this.device || !this.renderBindGroupLayout || !this.uniformBuffer || !this.sampler || !this.sceneTexture || !this.forwardLutTexture) {
       return;
     }
 
-    const layout = this.pipeline.getBindGroupLayout(0);
     this.bindGroup = this.device.createBindGroup({
-      layout,
+      label: 'crt-render-bind-group',
+      layout: this.renderBindGroupLayout,
       entries: [
         { binding: 0, resource: this.sampler },
-        { binding: 1, resource: this.sceneTexture.createView() },
+        { binding: 1, resource: this.sceneTexture.createView({ label: 'crt-scene-view' }) },
         { binding: 2, resource: { buffer: this.uniformBuffer } },
-        { binding: 3, resource: this.forwardLutTexture.createView() }
+        { binding: 3, resource: this.forwardLutTexture.createView({ label: 'crt-forward-lut-view' }) }
       ]
     });
   }
 
   private updateComputeBindGroup() {
-    if (!this.device || !this.computePipeline || !this.geometryUniformBuffer || !this.forwardLutTexture || !this.inverseLutTexture) {
+    if (!this.device || !this.computeBindGroupLayout || !this.geometryUniformBuffer || !this.forwardLutTexture || !this.inverseLutTexture) {
       return;
     }
 
-    const layout = this.computePipeline.getBindGroupLayout(0);
     this.computeBindGroup = this.device.createBindGroup({
-      layout,
+      label: 'crt-lut-bind-group',
+      layout: this.computeBindGroupLayout,
       entries: [
         { binding: 0, resource: { buffer: this.geometryUniformBuffer } },
-        { binding: 1, resource: this.forwardLutTexture.createView() },
-        { binding: 2, resource: this.inverseLutTexture.createView() }
+        { binding: 1, resource: this.forwardLutTexture.createView({ label: 'crt-forward-lut-storage' }) },
+        { binding: 2, resource: this.inverseLutTexture.createView({ label: 'crt-inverse-lut-storage' }) }
       ]
     });
   }
@@ -144,6 +345,7 @@ export class WebGpuRenderer implements CRTGpuRenderer {
     if (needsResize) {
       this.sceneTexture?.destroy();
       this.sceneTexture = this.device.createTexture({
+        label: 'crt-scene-texture',
         size: { width: frame.width, height: frame.height },
         format: 'rgba8unorm',
         usage:
@@ -186,21 +388,44 @@ export class WebGpuRenderer implements CRTGpuRenderer {
       this.inverseLutTexture?.destroy();
       const size = { width, height };
       this.forwardLutTexture = this.device.createTexture({
+        label: 'crt-forward-lut-texture',
         size,
-        format: 'rg16float',
-        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC
+        format: 'rgba16float',
+        usage:
+          GPUTextureUsage.TEXTURE_BINDING |
+          GPUTextureUsage.STORAGE_BINDING |
+          GPUTextureUsage.COPY_SRC |
+          GPUTextureUsage.COPY_DST
       });
       this.inverseLutTexture = this.device.createTexture({
+        label: 'crt-inverse-lut-texture',
         size,
-        format: 'rg16float',
-        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC
+        format: 'rgba16float',
+        usage:
+          GPUTextureUsage.TEXTURE_BINDING |
+          GPUTextureUsage.STORAGE_BINDING |
+          GPUTextureUsage.COPY_SRC |
+          GPUTextureUsage.COPY_DST
       });
       this.lutSize = size;
       this.updateRenderBindGroup();
       this.updateComputeBindGroup();
+      logger.info('CRT WebGPU LUT textures resized', {
+        width,
+        height,
+        format: 'rgba16float'
+      });
     }
 
-    if (!this.computePipeline || !this.computeBindGroup || !this.geometryUniformBuffer || !this.device) {
+    if (!this.computePipeline || !this.geometryUniformBuffer || !this.device) {
+      return;
+    }
+
+    if (!this.computeBindGroup) {
+      this.updateComputeBindGroup();
+    }
+
+    if (!this.computeBindGroup) {
       return;
     }
 
@@ -300,6 +525,12 @@ export class WebGpuRenderer implements CRTGpuRenderer {
     this.bindGroup = null;
     this.computeBindGroup = null;
     this.sampler = null;
+    this.renderBindGroupLayout = null;
+    this.computeBindGroupLayout = null;
+    this.renderPipelineLayout = null;
+    this.computePipelineLayout = null;
+    this.halfFloatFilterable = false;
+    this.format = null;
     this.canvas = null;
   }
 }

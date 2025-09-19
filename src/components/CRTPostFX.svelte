@@ -80,6 +80,10 @@
   let cssHeight = coordSnapshot.cssHeight;
 
   let pointerDown = false;
+  let lutFilterLinear = 0;
+
+  let toastMessage: string | null = null;
+  let toastTimer = 0;
 
   let captureDurationAccumulator = 0;
   let captureSamples = 0;
@@ -115,10 +119,14 @@
     return rows.map((row) => row.map((value) => value.toFixed(4)).join('  '));
   };
 
+  const formatFlipPath = (config: { flipYShader: boolean; unpackFlipY: boolean; flipYCapture: boolean }) =>
+    `{flipYShader:${config.flipYShader ? 'true' : 'false'}, unpackFlipY:${config.unpackFlipY ? 'true' : 'false'}, flipYCapture:${config.flipYCapture ? 'true' : 'false'}}`;
+
   let orientationInfo = {
     flipYCapture: FLIP_Y_CAPTURE,
     flipYShader: false,
     unpackFlipY: false,
+    flipPath: formatFlipPath({ flipYCapture: FLIP_Y_CAPTURE, flipYShader: false, unpackFlipY: false }),
     dpr: coordSnapshot.dpr,
     cssToUv: Array.from(coordSnapshot.cssToUv),
     uvToCss: Array.from(coordSnapshot.uvToCss),
@@ -128,6 +136,7 @@
     flipYCapture: boolean;
     flipYShader: boolean;
     unpackFlipY: boolean;
+    flipPath: string;
     dpr: number;
     cssToUv: number[];
     uvToCss: number[];
@@ -138,10 +147,13 @@
   let lastOrientationFingerprint = '';
 
   const updateOrientationInfo = () => {
+    const flipYShader = renderer?.mode === 'webgpu' ? FLIP_Y_SHADER_WEBGPU : false;
+    const unpackFlipY = renderer?.mode === 'webgl2' ? UNPACK_FLIP_Y_WEBGL : false;
     orientationInfo = {
       flipYCapture: FLIP_Y_CAPTURE,
-      flipYShader: renderer?.mode === 'webgpu' ? FLIP_Y_SHADER_WEBGPU : false,
-      unpackFlipY: renderer?.mode === 'webgl2' ? UNPACK_FLIP_Y_WEBGL : false,
+      flipYShader,
+      unpackFlipY,
+      flipPath: formatFlipPath({ flipYCapture: FLIP_Y_CAPTURE, flipYShader, unpackFlipY }),
       dpr: coordSnapshot.dpr,
       cssToUv: Array.from(coordSnapshot.cssToUv),
       uvToCss: Array.from(coordSnapshot.uvToCss),
@@ -162,6 +174,7 @@
       flipYCapture: FLIP_Y_CAPTURE,
       flipYShader: renderer?.mode === 'webgpu' ? FLIP_Y_SHADER_WEBGPU : false,
       unpackFlipY: renderer?.mode === 'webgl2' ? UNPACK_FLIP_Y_WEBGL : false,
+      flipPath: orientationInfo.flipPath,
       cssToUv: matrixHash(coordSnapshot.cssToUv),
       cssToTexture: matrixHash(coordSnapshot.cssToTexture),
       dpr: coordSnapshot.dpr
@@ -188,6 +201,19 @@
     }
     canvas.style.pointerEvents = enabled ? 'auto' : 'none';
     canvas.style.cursor = enabled ? 'none' : '';
+  };
+
+  const showToast = (message: string) => {
+    toastMessage = message;
+    if (typeof window !== 'undefined') {
+      if (toastTimer) {
+        window.clearTimeout(toastTimer);
+      }
+      toastTimer = window.setTimeout(() => {
+        toastMessage = null;
+        toastTimer = 0;
+      }, 4000);
+    }
   };
 
   const updateBadge = () => {
@@ -565,8 +591,10 @@
     geometryRevision += 1;
     geometryDirty = true;
     pointerDown = false;
+    lutFilterLinear = 0;
     uniforms[CURSOR_STATE_OFFSET + 2] = 0;
     uniforms[CURSOR_META_OFFSET + 1] = 1;
+    uniforms[CURSOR_META_OFFSET + 2] = 0;
     setCanvasInteractionEnabled(false);
     updateOrientationInfo();
     logOrientationState('teardown');
@@ -580,6 +608,9 @@
     teardownGpu();
 
     renderer = mode === 'webgpu' ? await createWebGpuRenderer(canvas) : await createWebGl2Renderer(canvas);
+    const capabilities = renderer.getCapabilities();
+    lutFilterLinear = capabilities.linearHalfFloatLut ? 1 : 0;
+    uniforms[CURSOR_META_OFFSET + 2] = lutFilterLinear;
     renderMode = mode;
     hasTexture = false;
 
@@ -678,6 +709,8 @@
       scheduleGeometryUpdate();
     } catch (error) {
       logger.error('CRT postFX failed to enable GPU mode', error);
+      const reason = error instanceof Error ? error.message : String(error);
+      showToast(`GPU disabled: ${reason}`);
       teardownGpu();
       renderMode = 'css';
       crtEffects.setRenderMode('css');
@@ -777,7 +810,7 @@
     setVec4(BLOOM_OFFSET, 0.7, 0.6, 0, 0);
     setVec4(CSS_OFFSET, 1, 1, 1, 1);
     setVec4(CURSOR_STATE_OFFSET, 0, 0, 0, 0);
-    setVec4(CURSOR_META_OFFSET, 0, 1, 0, 0);
+    setVec4(CURSOR_META_OFFSET, 0, 1, lutFilterLinear, 0);
 
     const unsubscribe = crtEffects.subscribe((value) => {
       effectState = value;
@@ -838,6 +871,10 @@
     if (typeof window !== 'undefined') {
       window.removeEventListener('resize', handleResize);
     }
+    if (toastTimer && typeof window !== 'undefined') {
+      window.clearTimeout(toastTimer);
+      toastTimer = 0;
+    }
   });
 </script>
 
@@ -857,6 +894,9 @@
     data-interactive={interactive}
   ></canvas>
   <span class="crt-postfx__badge" data-mode={renderMode}>{badgeLabel}</span>
+  {#if toastMessage}
+    <div class="crt-postfx__toast" aria-live="polite">{toastMessage}</div>
+  {/if}
   <div class="crt-postfx__orientation-panel" aria-hidden="true">
     <h2>Orientation</h2>
     <dl>
@@ -871,6 +911,10 @@
       <div>
         <dt>unpackFlipY</dt>
         <dd>{orientationInfo.unpackFlipY ? 'true' : 'false'}</dd>
+      </div>
+      <div>
+        <dt>flipPath</dt>
+        <dd>{orientationInfo.flipPath}</dd>
       </div>
       <div>
         <dt>DPR</dt>
@@ -947,6 +991,24 @@
     backdrop-filter: blur(6px);
     pointer-events: none;
     mix-blend-mode: screen;
+  }
+
+  .crt-postfx__toast {
+    position: fixed;
+    left: 50%;
+    bottom: 2.75rem;
+    transform: translateX(-50%);
+    padding: 0.75rem 1.5rem;
+    font-size: 0.75rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    border-radius: 9999px;
+    background: rgba(10, 24, 18, 0.88);
+    color: rgba(226, 255, 242, 0.95);
+    box-shadow: 0 20px 48px rgba(0, 0, 0, 0.45);
+    pointer-events: none;
+    z-index: 55;
+    backdrop-filter: blur(12px);
   }
 
   @media (max-width: 640px) {

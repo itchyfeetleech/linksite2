@@ -1,11 +1,11 @@
 struct LutUniforms {
-  size: vec4<f32>; // x=width, y=height, z=invWidth, w=invHeight
-  factors: vec4<f32>; // x=aspect, y=k1, z=k2, w=unused
+  size: vec4<f32>, // x=width, y=height, z=invWidth, w=invHeight
+  factors: vec4<f32>, // x=aspect, y=k1, z=k2, w=unused
 };
 
 @group(0) @binding(0) var<uniform> params: LutUniforms;
-@group(0) @binding(1) var forwardLut: texture_storage_2d<rg16float, write>;
-@group(0) @binding(2) var inverseLut: texture_storage_2d<rg16float, write>;
+@group(0) @binding(1) var forwardLut: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(2) var inverseLut: texture_storage_2d<rgba16float, write>;
 
 fn clampPoint(value: vec2<f32>) -> vec2<f32> {
   let width = params.size.x;
