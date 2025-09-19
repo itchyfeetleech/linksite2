@@ -38,6 +38,7 @@ export class WebGpuRenderer implements CRTGpuRenderer {
   private format: GPUTextureFormat | null = null;
   private geometryUniforms = new Float32Array(8);
   private halfFloatFilterable = false;
+  private warnedCompilationInfoUnavailable = false;
 
   getCapabilities(): RendererCapabilities {
     return {
@@ -45,77 +46,121 @@ export class WebGpuRenderer implements CRTGpuRenderer {
     } satisfies RendererCapabilities;
   }
 
-  private async runWgslSelfTest(device: GPUDevice) {
-    const vertexModule = device.createShaderModule({
-      label: 'crt-selftest-vertex',
-      code: `@vertex fn vs_self_test() -> @builtin(position) vec4<f32> {
-        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
-      }`
-    });
+  private async getCompilationInfo(
+    module: GPUShaderModule,
+    label: string
+  ): Promise<GPUCompilationInfo | null> {
+    const moduleWithLegacy = module as GPUShaderModule & {
+      compilationInfo?: () => Promise<GPUCompilationInfo>;
+    };
+    const getInfo =
+      typeof module.getCompilationInfo === 'function'
+        ? module.getCompilationInfo.bind(module)
+        : typeof moduleWithLegacy.compilationInfo === 'function'
+          ? moduleWithLegacy.compilationInfo.bind(module)
+          : null;
 
-    const fragmentModule = device.createShaderModule({
-      label: 'crt-selftest-fragment',
-      code: `@fragment fn fs_self_test() -> @location(0) vec4<f32> {
-        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
-      }`
-    });
-
-    const computeModule = device.createShaderModule({
-      label: 'crt-selftest-compute',
-      code: `@compute @workgroup_size(1, 1, 1) fn cs_self_test() {}`
-    });
+    if (!getInfo) {
+      if (!this.warnedCompilationInfoUnavailable) {
+        logger.info('CRT WebGPU shader compilation info unavailable; skipping validation', {
+          label,
+          reason: 'unsupported'
+        });
+        this.warnedCompilationInfoUnavailable = true;
+      }
+      return null;
+    }
 
     try {
-      const infos = await Promise.all([
-        vertexModule.compilationInfo(),
-        fragmentModule.compilationInfo(),
-        computeModule.compilationInfo()
-      ]);
-      const errors = infos.flatMap((info) =>
-        info.messages.filter((message) => message.type === 'error')
-      );
-      if (errors.length > 0) {
-        logger.warn('CRT WebGPU WGSL self-test reported errors', errors);
-      } else {
-        logger.info('CRT WebGPU WGSL self-test passed');
-      }
+      return await getInfo();
     } catch (error) {
-      logger.warn('CRT WebGPU WGSL self-test failed', error);
+      if (!this.warnedCompilationInfoUnavailable) {
+        logger.warn('CRT WebGPU shader compilation info query failed; skipping validation', {
+          label,
+          error
+        });
+        this.warnedCompilationInfoUnavailable = true;
+      }
+      return null;
+    }
+  }
+
+  private async runWgslSelfTest(device: GPUDevice) {
+    const modules = [
+      {
+        module: device.createShaderModule({
+          label: 'crt-selftest-vertex',
+          code: `@vertex fn vs_self_test() -> @builtin(position) vec4<f32> {
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+      }`
+        }),
+        label: 'crt-selftest-vertex'
+      },
+      {
+        module: device.createShaderModule({
+          label: 'crt-selftest-fragment',
+          code: `@fragment fn fs_self_test() -> @location(0) vec4<f32> {
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+      }`
+        }),
+        label: 'crt-selftest-fragment'
+      },
+      {
+        module: device.createShaderModule({
+          label: 'crt-selftest-compute',
+          code: `@compute @workgroup_size(1, 1, 1) fn cs_self_test() {}`
+        }),
+        label: 'crt-selftest-compute'
+      }
+    ];
+
+    const infos = await Promise.all(
+      modules.map(({ module, label }) => this.getCompilationInfo(module, label))
+    );
+    const availableInfos = infos.filter((info): info is GPUCompilationInfo => info !== null);
+
+    if (availableInfos.length === 0) {
+      logger.info('CRT WebGPU WGSL self-test skipped; compilation info unavailable');
+      return;
+    }
+
+    const errors = availableInfos.flatMap((info) =>
+      info.messages.filter((message) => message.type === 'error')
+    );
+    if (errors.length > 0) {
+      logger.warn('CRT WebGPU WGSL self-test reported errors', errors);
+    } else {
+      logger.info('CRT WebGPU WGSL self-test passed');
     }
   }
 
   private async validateShaderModule(module: GPUShaderModule, label: string, source: string) {
-    try {
-      const info = await module.compilationInfo();
-      const errors = info.messages.filter((message) => message.type === 'error');
-      if (errors.length === 0) {
-        return;
-      }
-
-      errors.forEach((message) => {
-        const lines = source.split('\n');
-        const line = message.lineNum ?? 0;
-        const start = Math.max(0, line - 2);
-        const end = Math.min(lines.length, line + 1);
-        const snippet = lines.slice(start, end).join('\n');
-        logger.error('CRT WebGPU shader compilation error', {
-          label,
-          line: message.lineNum,
-          column: message.linePos,
-          message: message.message,
-          snippet
-        });
-      });
-
-      throw new Error(`${label} failed to compile`);
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('failed to compile')) {
-        throw error;
-      }
-      const wrapped = new Error(`${label} validation failed`);
-      (wrapped as { cause?: unknown }).cause = error;
-      throw wrapped;
+    const info = await this.getCompilationInfo(module, label);
+    if (!info) {
+      return;
     }
+
+    const errors = info.messages.filter((message) => message.type === 'error');
+    if (errors.length === 0) {
+      return;
+    }
+
+    errors.forEach((message) => {
+      const lines = source.split('\n');
+      const line = message.lineNum ?? 0;
+      const start = Math.max(0, line - 2);
+      const end = Math.min(lines.length, line + 1);
+      const snippet = lines.slice(start, end).join('\n');
+      logger.error('CRT WebGPU shader compilation error', {
+        label,
+        line: message.lineNum,
+        column: message.linePos,
+        message: message.message,
+        snippet
+      });
+    });
+
+    throw new Error(`${label} failed to compile`);
   }
 
   async init(canvas: HTMLCanvasElement) {
