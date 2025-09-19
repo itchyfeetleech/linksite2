@@ -1,12 +1,6 @@
-import { sampleLut, type LutResult } from './geometryMath';
+import { mapScreenToDom, type GeometryParams } from './geometryMath';
 import { applyMat3, type CoordSpaceSnapshot } from './coordSpace';
 import { logger } from '../logger';
-
-interface LutSample {
-  width: number;
-  height: number;
-  data: Float32Array;
-}
 
 export interface CursorState {
   screenX: number;
@@ -27,7 +21,7 @@ export interface PointerActivityState {
 
 export interface EventProxyOptions {
   canvas: HTMLCanvasElement;
-  getLut: () => LutSample | null;
+  getWarpParams: () => GeometryParams | null;
   getCoordSpace: () => CoordSpaceSnapshot | null;
   onCursor?: (state: CursorState) => void;
   onActivity?: (state: PointerActivityState) => void;
@@ -35,7 +29,6 @@ export interface EventProxyOptions {
 }
 
 export interface EventProxyController {
-  updateLut(result: LutResult | null): void;
   destroy(): void;
 }
 
@@ -58,14 +51,13 @@ const focusElement = (target: EventTarget | null) => {
 
 export const createEventProxy = ({
   canvas,
-  getLut,
+  getWarpParams,
   getCoordSpace,
   onCursor,
   onActivity,
   logLatency
 }: EventProxyOptions): EventProxyController => {
   let disposed = false;
-  let lut: LutSample | null = null;
 
   const pointerTargets = new Map<number, EventTarget>();
   const pointerPositions = new Map<number, { x: number; y: number }>();
@@ -99,7 +91,7 @@ export const createEventProxy = ({
 
   const samplePoint = (x: number, y: number) => {
     const coordSpace = getCoordSpace();
-    const sample = lut ?? getLut();
+    const params = getWarpParams();
     if (!coordSpace) {
       return {
         domX: x,
@@ -110,7 +102,7 @@ export const createEventProxy = ({
     }
 
     const { x: uvX, y: uvY } = applyMat3(coordSpace.cssToUv, x, y);
-    if (!sample) {
+    if (!params) {
       return {
         domX: x,
         domY: y,
@@ -119,7 +111,7 @@ export const createEventProxy = ({
       };
     }
 
-    const mapped = sampleLut(sample.data, sample.width, sample.height, uvX, uvY);
+    const mapped = mapScreenToDom(x, y, params);
     return {
       domX: mapped.x,
       domY: mapped.y,
@@ -164,8 +156,6 @@ export const createEventProxy = ({
     height: event.height,
     clientX: coords.x,
     clientY: coords.y,
-    pageX: coords.x + window.scrollX,
-    pageY: coords.y + window.scrollY,
     screenX: event.screenX + (coords.x - event.clientX),
     screenY: event.screenY + (coords.y - event.clientY),
     movementX: movement.x,
@@ -481,17 +471,5 @@ export const createEventProxy = ({
     forwardingPointers.clear();
   };
 
-  const updateLut = (result: LutResult | null) => {
-    if (!result) {
-      lut = null;
-      return;
-    }
-    lut = {
-      width: result.width,
-      height: result.height,
-      data: result.inverse
-    } satisfies LutSample;
-  };
-
-  return { updateLut, destroy };
+  return { destroy };
 };

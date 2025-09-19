@@ -24,10 +24,6 @@ export interface CaptureFrame {
 
 export const UNIFORM_FLOAT_COUNT = 28;
 
-export interface RendererCapabilities {
-  linearHalfFloatLut: boolean;
-}
-
 export interface CRTGpuRenderer {
   readonly mode: Exclude<CRTRenderMode, 'css'>;
   init(canvas: HTMLCanvasElement): Promise<void>;
@@ -40,13 +36,7 @@ export interface CRTGpuRenderer {
     dpr: number;
     k1: number;
     k2: number;
-  }, lutData?: {
-    forward: Float32Array;
-    inverse: Float32Array;
-    width: number;
-    height: number;
   }): Promise<void>;
-  getCapabilities(): RendererCapabilities;
   destroy(): void;
 }
 

@@ -26,7 +26,7 @@
     scanlines: { min: 0, max: 1, step: 0.05 },
     glow: { min: 0, max: 1, step: 0.05 },
     aberration: { min: 0, max: 1, step: 0.05 },
-    barrel: { min: 0, max: 0.01, step: 0.0005 }
+    barrel: { min: -1, max: 1, step: 0.01 }
   };
 
   const storageKeys = [
@@ -172,7 +172,7 @@
 
   const formatIntensity = (key: CRTToggle, value: number) => {
     if (key === 'barrel') {
-      return `${(value * 1000).toFixed(1)}e-3`;
+      return value >= 0 ? `+${value.toFixed(2)}` : value.toFixed(2);
     }
     return `${Math.round(value * 100)}%`;
   };

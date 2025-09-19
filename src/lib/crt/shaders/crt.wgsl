@@ -8,10 +8,9 @@ struct Uniforms {
   cursorMeta: vec4<f32>,
 };
 
-@group(0) @binding(0) var linearSampler: sampler;
+@group(0) @binding(0) var nearestSampler: sampler;
 @group(0) @binding(1) var sceneTexture: texture_2d<f32>;
 @group(0) @binding(2) var<uniform> uniforms: Uniforms;
-@group(0) @binding(3) var forwardLut: texture_2d<f32>;
 
 struct VertexOutput {
   @builtin(position) position: vec4<f32>,
@@ -46,46 +45,18 @@ fn clampCss(value: vec2<f32>, size: vec2<f32>) -> vec2<f32> {
   );
 }
 
-fn clampTexelCoord(coord: vec2<i32>, maxCoord: vec2<i32>) -> vec2<i32> {
-  let zero = vec2<i32>(0, 0);
-  return min(max(coord, zero), maxCoord);
-}
-
-fn sampleForwardLut(uv: vec2<f32>, allowLinear: f32) -> vec2<f32> {
-  let clampedUv = clampUv(uv);
-  if (allowLinear > 0.5) {
-    return textureSampleLevel(forwardLut, linearSampler, clampedUv, 0.0).xy;
-  }
-
-  let dims = textureDimensions(forwardLut);
-  if (dims.x == 0u || dims.y == 0u) {
-    return clampedUv * uniforms.cssMetrics.xy;
-  }
-
-  let dimsF = vec2<f32>(f32(dims.x), f32(dims.y));
-  let texel = clampedUv * dimsF - vec2<f32>(0.5, 0.5);
-  let base = floor(texel);
-  let frac = texel - base;
-  let baseCoord = vec2<i32>(base);
-  let maxCoord = vec2<i32>(i32(dims.x) - 1, i32(dims.y) - 1);
-
-  let c00 = clampTexelCoord(baseCoord, maxCoord);
-  let c10 = clampTexelCoord(baseCoord + vec2<i32>(1, 0), maxCoord);
-  let c01 = clampTexelCoord(baseCoord + vec2<i32>(0, 1), maxCoord);
-  let c11 = clampTexelCoord(baseCoord + vec2<i32>(1, 1), maxCoord);
-
-  let s00 = textureLoad(forwardLut, c00, 0).xy;
-  let s10 = textureLoad(forwardLut, c10, 0).xy;
-  let s01 = textureLoad(forwardLut, c01, 0).xy;
-  let s11 = textureLoad(forwardLut, c11, 0).xy;
-
-  let ix0 = mix(s00, s10, frac.x);
-  let ix1 = mix(s01, s11, frac.x);
-  return mix(ix0, ix1, frac.y);
-}
-
 fn cssToSceneUv(css: vec2<f32>, dpr: f32, invResolution: vec2<f32>) -> vec2<f32> {
   return vec2<f32>(css.x * dpr * invResolution.x, css.y * dpr * invResolution.y);
+}
+
+fn warpSampleUv(uv: vec2<f32>, aspect: f32, k1: f32, k2: f32) -> vec2<f32> {
+  var p = uv * 2.0 - vec2<f32>(1.0, 1.0);
+  p.x = p.x * aspect;
+  let r2 = dot(p, p);
+  let scale = 1.0 + k1 * r2 + k2 * r2 * r2;
+  var q = p * scale;
+  q.x = q.x / aspect;
+  return q * 0.5 + vec2<f32>(0.5, 0.5);
 }
 
 fn vignetteMask(css: vec2<f32>, invCss: vec2<f32>) -> f32 {
@@ -119,6 +90,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
   let devicePixelRatio = uniforms.effects.w;
   let bloomThreshold = uniforms.bloomParams.x;
   let bloomSoftness = uniforms.bloomParams.y;
+  let k1 = uniforms.bloomParams.z;
+  let k2 = uniforms.bloomParams.w;
   let cssSize = uniforms.cssMetrics.xy;
   let invCss = uniforms.cssMetrics.zw;
   let cursor = uniforms.cursorState;
@@ -126,10 +99,13 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
   let bloomIntensity = baseBloomIntensity * cursorMeta.y;
 
-  let cssCoordRaw = sampleForwardLut(uv, uniforms.cursorMeta.z);
-  let cssCoord = clampCss(cssCoordRaw, cssSize);
+  let aspect = resolution.y > 0.0 ? resolution.x / resolution.y : 1.0;
+  let warpedUv = warpSampleUv(uv, aspect, k1, k2);
+  let outside = warpedUv.x < 0.0 || warpedUv.x > 1.0 || warpedUv.y < 0.0 || warpedUv.y > 1.0;
+  let clampedWarp = clampUv(warpedUv);
+  let cssCoord = clampCss(clampedWarp * cssSize, cssSize);
   let sceneUv = clampUv(cssToSceneUv(cssCoord, devicePixelRatio, invResolution));
-  var color = textureSampleLevel(sceneTexture, linearSampler, sceneUv, 0.0).rgb;
+  var color = textureSampleLevel(sceneTexture, nearestSampler, sceneUv, 0.0).rgb;
 
   if (aberrationStrength > 0.0001) {
     let center = cssCoord - cssSize * 0.5;
@@ -140,8 +116,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let blueCss = clampCss(cssCoord - direction * offsetAmount, cssSize);
     let redUv = clampUv(cssToSceneUv(redCss, devicePixelRatio, invResolution));
     let blueUv = clampUv(cssToSceneUv(blueCss, devicePixelRatio, invResolution));
-    let redSample = textureSampleLevel(sceneTexture, linearSampler, redUv, 0.0).r;
-    let blueSample = textureSampleLevel(sceneTexture, linearSampler, blueUv, 0.0).b;
+    let redSample = textureSampleLevel(sceneTexture, nearestSampler, redUv, 0.0).r;
+    let blueSample = textureSampleLevel(sceneTexture, nearestSampler, blueUv, 0.0).b;
     color.r = mix(color.r, redSample, min(0.85, aberrationStrength * 0.85));
     color.b = mix(color.b, blueSample, min(0.85, aberrationStrength * 0.85));
   }
@@ -176,7 +152,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     );
     for (var i = 0u; i < 5u; i = i + 1u) {
       let sampleUv = clampUv(sceneUv + taps[i]);
-      accum = accum + textureSampleLevel(sceneTexture, linearSampler, sampleUv, 0.0).rgb;
+      accum = accum + textureSampleLevel(sceneTexture, nearestSampler, sampleUv, 0.0).rgb;
     }
     accum = accum / 5.0;
     let luminance = dot(accum, vec3<f32>(0.2126, 0.7152, 0.0722));
@@ -184,9 +160,10 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     color = mix(color, accum, weight * bloomIntensity * bloomSoftness);
   }
 
-  if (vignetteStrength > 0.0001) {
+  let vignetteWeight = outside ? 1.0 : vignetteStrength;
+  if (vignetteWeight > 0.0001) {
     let vig = vignetteMask(cssCoord, invCss);
-    color = color * mix(1.0, vig, vignetteStrength);
+    color = color * mix(1.0, vig, clamp(vignetteWeight, 0.0, 1.0));
   }
 
   if (noiseIntensity > 0.0001) {

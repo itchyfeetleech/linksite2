@@ -1,12 +1,6 @@
 import vertSource from './shaders/crt.vert.glsl?raw';
 import fragSource from './shaders/crt.frag.glsl?raw';
-import { encodeFloat32To16 } from './float16';
-import type { CaptureFrame, CRTGpuRenderer, RendererCapabilities } from './types';
-
-import type PicoGLModule from 'picogl';
-import type { App as PicoApp, DrawCall as PicoDrawCall, Texture as PicoTexture } from 'picogl';
-
-type TextureSource = Parameters<PicoTexture['data']>[0];
+import type { CaptureFrame, CRTGpuRenderer } from './types';
 
 interface TextureSize {
   width: number;
@@ -16,23 +10,17 @@ interface TextureSize {
 export class WebGl2Renderer implements CRTGpuRenderer {
   readonly mode = 'webgl2' as const;
 
-  private picoGL: PicoGLModule | null = null;
-  private app: PicoApp | null = null;
-  private drawCall: PicoDrawCall | null = null;
-  private sceneTexture: PicoTexture | null = null;
-  private forwardLutTexture: PicoTexture | null = null;
+  private picoGL: any = null;
+  private app: any = null;
+  private drawCall: any = null;
+  private sceneTexture: any = null;
   private sceneSize: TextureSize | null = null;
-  private lutSize: TextureSize | null = null;
   private canvas: HTMLCanvasElement | null = null;
-
-  getCapabilities(): RendererCapabilities {
-    return { linearHalfFloatLut: true } satisfies RendererCapabilities;
-  }
 
   async init(canvas: HTMLCanvasElement) {
     if (!this.picoGL) {
       const module = await import('picogl');
-      this.picoGL = (module as { default?: PicoGLModule }).default ?? (module as PicoGLModule);
+      this.picoGL = (module as { default?: unknown }).default ?? module;
     }
 
     const PicoGL = this.picoGL;
@@ -54,7 +42,7 @@ export class WebGl2Renderer implements CRTGpuRenderer {
     }
 
     this.canvas = canvas;
-    const app = PicoGL.createApp(canvas, { context }) as PicoApp;
+    const app = PicoGL.createApp(canvas, { context });
     this.app = app.clearColor(0, 0, 0, 1);
 
     const program = this.app.createProgram(vertSource, fragSource);
@@ -63,33 +51,17 @@ export class WebGl2Renderer implements CRTGpuRenderer {
     this.sceneTexture = this.app
       .createTexture2D(1, 1, {
         data: null,
-        minFilter: PicoGL.LINEAR,
-        magFilter: PicoGL.LINEAR,
+        minFilter: PicoGL.NEAREST,
+        magFilter: PicoGL.NEAREST,
         wrapS: PicoGL.CLAMP_TO_EDGE,
         wrapT: PicoGL.CLAMP_TO_EDGE
       })
       .bind(0);
 
-    this.forwardLutTexture = this.app
-      .createTexture2D(1, 1, {
-        data: null,
-        internalFormat: context.RGBA16F,
-        format: context.RGBA,
-        type: PicoGL.HALF_FLOAT,
-        minFilter: PicoGL.LINEAR,
-        magFilter: PicoGL.LINEAR,
-        wrapS: PicoGL.CLAMP_TO_EDGE,
-        wrapT: PicoGL.CLAMP_TO_EDGE
-      })
-      .bind(1);
-
-    this.forwardLutTexture.data(new Uint16Array([0, 0, 0, 0]));
-
     this.drawCall = this.app
       .createDrawCall(program, vertexArray)
       .primitive(this.app.TRIANGLES)
       .texture('uScene', this.sceneTexture)
-      .texture('uForwardLut', this.forwardLutTexture)
       .uniform('uResolution', [1, 1, 1, 1])
       .uniform('uTiming', [0, 0, 0, 0])
       .uniform('uEffects', [0, 0, 0, 1])
@@ -112,8 +84,8 @@ export class WebGl2Renderer implements CRTGpuRenderer {
     this.sceneTexture = this.app
       .createTexture2D(width, height, {
         data: null,
-        minFilter: this.picoGL.LINEAR,
-        magFilter: this.picoGL.LINEAR,
+        minFilter: this.picoGL.NEAREST,
+        magFilter: this.picoGL.NEAREST,
         wrapS: this.picoGL.CLAMP_TO_EDGE,
         wrapT: this.picoGL.CLAMP_TO_EDGE
       })
@@ -135,7 +107,7 @@ export class WebGl2Renderer implements CRTGpuRenderer {
       return;
     }
 
-    const source = frame.bitmap as unknown as TextureSource;
+    const source = frame.bitmap as ImageBitmap;
     const gl = this.app.gl;
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
     this.sceneTexture.data(source);
@@ -143,58 +115,7 @@ export class WebGl2Renderer implements CRTGpuRenderer {
     frame.bitmap.close();
   }
 
-  async updateGeometry(
-    _params: { width: number; height: number; dpr: number; k1: number; k2: number },
-    lutData?: { forward: Float32Array; inverse: Float32Array; width: number; height: number }
-  ) {
-    if (!this.app || !this.picoGL) {
-      return;
-    }
-
-    if (!lutData) {
-      return;
-    }
-
-    const { width, height, forward } = lutData;
-    const PicoGL = this.picoGL;
-    const gl = this.app.gl;
-
-    const needsResize = !this.lutSize || this.lutSize.width !== width || this.lutSize.height !== height;
-    if (needsResize) {
-      this.forwardLutTexture?.delete();
-      this.forwardLutTexture = this.app
-        .createTexture2D(width, height, {
-          data: null,
-          internalFormat: gl.RGBA16F,
-          format: gl.RGBA,
-          type: PicoGL.HALF_FLOAT,
-          minFilter: PicoGL.LINEAR,
-          magFilter: PicoGL.LINEAR,
-          wrapS: PicoGL.CLAMP_TO_EDGE,
-          wrapT: PicoGL.CLAMP_TO_EDGE
-        })
-        .bind(1);
-      this.drawCall?.texture('uForwardLut', this.forwardLutTexture);
-      this.lutSize = { width, height };
-    }
-
-    if (!this.forwardLutTexture) {
-      return;
-    }
-
-    const packed = new Float32Array(width * height * 4);
-    for (let i = 0, j = 0; i < forward.length; i += 2, j += 4) {
-      packed[j] = forward[i];
-      packed[j + 1] = forward[i + 1];
-      packed[j + 2] = 0;
-      packed[j + 3] = 1;
-    }
-
-    const encoded = encodeFloat32To16(packed);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
-    this.forwardLutTexture.data(encoded);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
-  }
+  async updateGeometry(_params: { width: number; height: number; dpr: number; k1: number; k2: number }) {}
 
   render(uniforms: Float32Array) {
     if (!this.app || !this.drawCall) {
@@ -239,17 +160,14 @@ export class WebGl2Renderer implements CRTGpuRenderer {
 
   destroy() {
     this.sceneTexture?.delete();
-    this.forwardLutTexture?.delete();
     this.drawCall?.delete();
     if (this.app) {
       this.app.gl.getExtension('WEBGL_lose_context')?.loseContext();
     }
     this.sceneTexture = null;
-    this.forwardLutTexture = null;
     this.drawCall = null;
     this.app = null;
     this.sceneSize = null;
-    this.lutSize = null;
     this.canvas = null;
   }
 }
