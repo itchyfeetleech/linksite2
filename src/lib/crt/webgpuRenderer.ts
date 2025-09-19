@@ -43,6 +43,7 @@ export class WebGpuRenderer implements CRTGpuRenderer {
   private hasTimestampResult = false;
   private lastGpuFrameMs = 0;
   private queryCursor = 0;
+  private warnedTimestampFallback = false;
 
   private async getCompilationInfo(
     module: GPUShaderModule,
@@ -395,7 +396,27 @@ export class WebGpuRenderer implements CRTGpuRenderer {
     let queryEndIndex = 1;
     let timestampBuffer: GPUBuffer | null = null;
 
-    if (this.supportsTimestampQuery && this.timestampQuerySet) {
+    const commandEncoderWithTimestamps = encoder as GPUCommandEncoder & {
+      writeTimestamp?: (querySet: GPUQuerySet, queryIndex: number) => void;
+      resolveQuerySet?: (querySet: GPUQuerySet, firstQuery: number, queryCount: number, destination: GPUBuffer, destinationOffset?: number) => void;
+    };
+
+    let canWriteTimestamp = Boolean(
+      this.supportsTimestampQuery &&
+      this.timestampQuerySet &&
+      typeof commandEncoderWithTimestamps.writeTimestamp === 'function' &&
+      typeof commandEncoderWithTimestamps.resolveQuerySet === 'function'
+    );
+
+    if (this.supportsTimestampQuery && !canWriteTimestamp && !this.warnedTimestampFallback) {
+      this.warnedTimestampFallback = true;
+      logger.warn('CRT WebGPU timestamp query unsupported on this device; using CPU timings');
+      this.supportsTimestampQuery = false;
+      this.timestampQuerySet?.destroy?.();
+      this.timestampQuerySet = null;
+    }
+
+    if (canWriteTimestamp && this.timestampQuerySet) {
       const pairCount = Math.max(1, Math.floor(this.timestampQuerySet.count / 2));
       this.queryCursor = this.queryCursor % pairCount;
       queryBaseIndex = this.queryCursor * 2;
@@ -403,7 +424,18 @@ export class WebGpuRenderer implements CRTGpuRenderer {
       if (queryEndIndex >= this.timestampQuerySet.count) {
         queryEndIndex = 0;
       }
-      encoder.writeTimestamp(this.timestampQuerySet, queryBaseIndex);
+      try {
+        commandEncoderWithTimestamps.writeTimestamp?.(this.timestampQuerySet, queryBaseIndex);
+      } catch (error) {
+        canWriteTimestamp = false;
+        if (!this.warnedTimestampFallback) {
+          this.warnedTimestampFallback = true;
+          logger.warn('CRT WebGPU writeTimestamp failed; falling back to CPU timings', error);
+        }
+        this.supportsTimestampQuery = false;
+        this.timestampQuerySet?.destroy?.();
+        this.timestampQuerySet = null;
+      }
     }
 
     const pass = encoder.beginRenderPass({
@@ -422,16 +454,29 @@ export class WebGpuRenderer implements CRTGpuRenderer {
     pass.draw(3, 1, 0, 0);
     pass.end();
 
-    if (this.supportsTimestampQuery && this.timestampQuerySet) {
-      encoder.writeTimestamp(this.timestampQuerySet, queryEndIndex);
-      timestampBuffer = this.device.createBuffer({
-        label: 'crt-timestamp-buffer',
-        size: 16,
-        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
-      });
-      encoder.resolveQuerySet(this.timestampQuerySet, queryBaseIndex, 2, timestampBuffer, 0);
-      const pairCount = Math.max(1, Math.floor(this.timestampQuerySet.count / 2));
-      this.queryCursor = (this.queryCursor + 1) % pairCount;
+    if (canWriteTimestamp && this.timestampQuerySet) {
+      try {
+        commandEncoderWithTimestamps.writeTimestamp?.(this.timestampQuerySet, queryEndIndex);
+        timestampBuffer = this.device.createBuffer({
+          label: 'crt-timestamp-buffer',
+          size: 16,
+          usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+        });
+        commandEncoderWithTimestamps.resolveQuerySet?.(this.timestampQuerySet, queryBaseIndex, 2, timestampBuffer, 0);
+        const pairCount = Math.max(1, Math.floor(this.timestampQuerySet.count / 2));
+        this.queryCursor = (this.queryCursor + 1) % pairCount;
+      } catch (error) {
+        if (!this.warnedTimestampFallback) {
+          this.warnedTimestampFallback = true;
+          logger.warn('CRT WebGPU resolveQuerySet failed; using CPU timings', error);
+        }
+        timestampBuffer?.destroy();
+        timestampBuffer = null;
+        canWriteTimestamp = false;
+        this.supportsTimestampQuery = false;
+        this.timestampQuerySet?.destroy?.();
+        this.timestampQuerySet = null;
+      }
     }
 
     const commandBuffer = encoder.finish();
