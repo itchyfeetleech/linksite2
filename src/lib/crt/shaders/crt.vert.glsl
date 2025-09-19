@@ -9,12 +9,10 @@ void main() {
   positions[1] = vec2(-1.0, 3.0);
   positions[2] = vec2(3.0, -1.0);
 
-  vec2 uvs[3];
-  uvs[0] = vec2(0.0, 0.0);
-  uvs[1] = vec2(0.0, 2.0);
-  uvs[2] = vec2(2.0, 0.0);
-
-  gl_Position = vec4(positions[gl_VertexID], 0.0, 1.0);
-  vUv = uvs[gl_VertexID];
+  vec2 position = positions[gl_VertexID];
+  gl_Position = vec4(position, 0.0, 1.0);
+  vec2 uv = position * 0.5 + vec2(0.5);
+  uv.y = 1.0 - uv.y;
+  vUv = uv;
 }
 

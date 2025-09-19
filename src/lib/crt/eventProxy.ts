@@ -1,4 +1,5 @@
-import { bilinearSample, type LutResult } from './geometryMath';
+import { sampleLut, type LutResult } from './geometryMath';
+import { applyMat3, type CoordSpaceSnapshot } from './coordSpace';
 
 interface LutSample {
   width: number;
@@ -11,6 +12,8 @@ export interface CursorState {
   screenY: number;
   domX: number;
   domY: number;
+  uvX: number;
+  uvY: number;
   pointerType: string;
   buttons: number;
   visible: boolean;
@@ -24,6 +27,7 @@ export interface PointerActivityState {
 export interface EventProxyOptions {
   canvas: HTMLCanvasElement;
   getLut: () => LutSample | null;
+  getCoordSpace: () => CoordSpaceSnapshot | null;
   onCursor?: (state: CursorState) => void;
   onActivity?: (state: PointerActivityState) => void;
   logLatency?: (value: number) => void;
@@ -54,6 +58,7 @@ const focusElement = (target: EventTarget | null) => {
 export const createEventProxy = ({
   canvas,
   getLut,
+  getCoordSpace,
   onCursor,
   onActivity,
   logLatency
@@ -89,11 +94,34 @@ export const createEventProxy = ({
   };
 
   const samplePoint = (x: number, y: number) => {
+    const coordSpace = getCoordSpace();
     const sample = lut ?? getLut();
-    if (!sample) {
-      return { x, y };
+    if (!coordSpace) {
+      return {
+        domX: x,
+        domY: y,
+        uvX: 0,
+        uvY: 0
+      };
     }
-    return bilinearSample(sample.data, sample.width, sample.height, x, y);
+
+    const { x: uvX, y: uvY } = applyMat3(coordSpace.cssToUv, x, y);
+    if (!sample) {
+      return {
+        domX: x,
+        domY: y,
+        uvX,
+        uvY
+      };
+    }
+
+    const mapped = sampleLut(sample.data, sample.width, sample.height, uvX, uvY);
+    return {
+      domX: mapped.x,
+      domY: mapped.y,
+      uvX,
+      uvY
+    };
   };
 
   const updateCursor = (payload: CursorState) => {
@@ -173,7 +201,8 @@ export const createEventProxy = ({
 
   const handlePointerDown = (event: PointerEvent) => {
     const start = performance.now();
-    const coords = samplePoint(event.clientX, event.clientY);
+    const sample = samplePoint(event.clientX, event.clientY);
+    const coords = { x: sample.domX, y: sample.domY };
     const target = dispatchPointer('pointerdown', event, coords);
     pointerTargets.set(event.pointerId, target);
     pointerButtons.set(event.pointerId, event.buttons);
@@ -182,8 +211,10 @@ export const createEventProxy = ({
     updateCursor({
       screenX: event.clientX,
       screenY: event.clientY,
-      domX: coords.x,
-      domY: coords.y,
+      domX: sample.domX,
+      domY: sample.domY,
+      uvX: sample.uvX,
+      uvY: sample.uvY,
       pointerType: event.pointerType,
       buttons: event.buttons,
       visible: true
@@ -194,14 +225,17 @@ export const createEventProxy = ({
   const handlePointerMove = (event: PointerEvent) => {
     const process = (source: PointerEvent) => {
       const start = performance.now();
-      const coords = samplePoint(source.clientX, source.clientY);
+      const sample = samplePoint(source.clientX, source.clientY);
+      const coords = { x: sample.domX, y: sample.domY };
       const target = dispatchPointer('pointermove', source, coords, true);
       pointerButtons.set(source.pointerId, source.buttons);
       updateCursor({
         screenX: source.clientX,
         screenY: source.clientY,
-        domX: coords.x,
-        domY: coords.y,
+        domX: sample.domX,
+        domY: sample.domY,
+        uvX: sample.uvX,
+        uvY: sample.uvY,
         pointerType: source.pointerType,
         buttons: source.buttons,
         visible: true
@@ -222,7 +256,8 @@ export const createEventProxy = ({
 
   const finishPointer = (event: PointerEvent, type: 'pointerup' | 'pointercancel') => {
     const start = performance.now();
-    const coords = samplePoint(event.clientX, event.clientY);
+    const sample = samplePoint(event.clientX, event.clientY);
+    const coords = { x: sample.domX, y: sample.domY };
     dispatchPointer(type, event, coords, true);
     pointerTargets.delete(event.pointerId);
     pointerPositions.delete(event.pointerId);
@@ -231,8 +266,10 @@ export const createEventProxy = ({
     updateCursor({
       screenX: event.clientX,
       screenY: event.clientY,
-      domX: coords.x,
-      domY: coords.y,
+      domX: sample.domX,
+      domY: sample.domY,
+      uvX: sample.uvX,
+      uvY: sample.uvY,
       pointerType: event.pointerType,
       buttons: 0,
       visible: type === 'pointerup'
@@ -249,12 +286,14 @@ export const createEventProxy = ({
   };
 
   const handlePointerEnter = (event: PointerEvent) => {
-    const coords = samplePoint(event.clientX, event.clientY);
+    const sample = samplePoint(event.clientX, event.clientY);
     updateCursor({
       screenX: event.clientX,
       screenY: event.clientY,
-      domX: coords.x,
-      domY: coords.y,
+      domX: sample.domX,
+      domY: sample.domY,
+      uvX: sample.uvX,
+      uvY: sample.uvY,
       pointerType: event.pointerType,
       buttons: event.buttons,
       visible: true
@@ -265,11 +304,14 @@ export const createEventProxy = ({
     pointerTargets.delete(event.pointerId);
     pointerPositions.delete(event.pointerId);
     pointerButtons.delete(event.pointerId);
+    const sample = samplePoint(event.clientX, event.clientY);
     updateCursor({
       screenX: event.clientX,
       screenY: event.clientY,
-      domX: event.clientX,
-      domY: event.clientY,
+      domX: sample.domX,
+      domY: sample.domY,
+      uvX: sample.uvX,
+      uvY: sample.uvY,
       pointerType: event.pointerType,
       buttons: 0,
       visible: false
@@ -278,7 +320,8 @@ export const createEventProxy = ({
 
   const handleWheel = (event: WheelEvent) => {
     const start = performance.now();
-    const coords = samplePoint(event.clientX, event.clientY);
+    const sample = samplePoint(event.clientX, event.clientY);
+    const coords = { x: sample.domX, y: sample.domY };
     const target = getTarget(-1, coords);
     const synthetic = new WheelEvent(event.type, {
       bubbles: true,
@@ -306,7 +349,8 @@ export const createEventProxy = ({
 
   const handleMouseLike = (event: MouseEvent) => {
     const start = performance.now();
-    const coords = samplePoint(event.clientX, event.clientY);
+    const sample = samplePoint(event.clientX, event.clientY);
+    const coords = { x: sample.domX, y: sample.domY };
     const target = getTarget(-1, coords);
     const synthetic = new MouseEvent(event.type, {
       bubbles: true,

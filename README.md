@@ -62,6 +62,10 @@ real time. Pointer events remain routed to the underlying DOM, so links and cont
   disabling temporal noise for motion-sensitive users or hidden tabs.
 - All CRT toggles live in a single Svelte store, which feeds uniforms for the shaders or CSS custom properties. The Debug
   overlay now surfaces the active render mode and exposes the same controls regardless of backend.
+- A dedicated `CoordSpace` helper keeps CSS, texture, and UV coordinates in sync. html2canvas captures stay unflipped; WebGPU
+  flips UVs in the vertex stage while WebGL2 relies on `UNPACK_FLIP_Y_WEBGL`. The Orientation panel in `<CRTPostFX>` previews
+  the matrices, DPR, and flip flags alongside a numbered checkerboard to verify top/bottom/left/right alignment after resizes
+  or DPR changes.
 
 ## Plugin system
 

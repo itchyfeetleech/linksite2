@@ -2,6 +2,10 @@ import html2canvas from 'html2canvas';
 import { logger } from '../logger';
 import type { CaptureFrame } from './types';
 
+// html2canvas renders with CSS-top-left origin. We keep the bitmap unflipped and
+// flip in the GPU/WebGL pipelines for consistency across renderers.
+export const FLIP_Y_CAPTURE = false;
+
 export interface CaptureStats {
   duration: number;
 }
@@ -136,16 +140,25 @@ export const createDomCapture = ({
 
     try {
       const dpr = window.devicePixelRatio || 1;
+      const viewportWidth = Math.max(1, Math.round(window.innerWidth));
+      const viewportHeight = Math.max(1, Math.round(window.innerHeight));
       const captureStart = performance.now();
       const canvas = await html2canvas(root, {
         backgroundColor: null,
         useCORS: true,
         logging: false,
         scale: dpr,
+        width: viewportWidth,
+        height: viewportHeight,
+        windowWidth: viewportWidth,
+        windowHeight: viewportHeight,
         ignoreElements: (element: Element) => ignorePredicate(element)
       });
 
-      const bitmap = await createImageBitmap(canvas);
+      const bitmap = await createImageBitmap(canvas, {
+        imageOrientation: FLIP_Y_CAPTURE ? 'flipY' : 'none',
+        premultiplyAlpha: 'premultiply'
+      });
       const duration = performance.now() - captureStart;
       await onCapture({
         bitmap,
