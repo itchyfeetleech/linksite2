@@ -2,13 +2,24 @@
 precision highp float;
 
 uniform sampler2D uScene;
-uniform vec4 uResolution; // width, height, invWidth, invHeight
-uniform vec4 uTiming; // time, scanline, slotMask, vignette
-uniform vec4 uEffects; // bloom, aberration, noise, dpr
-uniform vec4 uBloomParams; // threshold, softness, k1, k2
-uniform vec4 uCssMetrics; // cssWidth, cssHeight, invCssWidth, invCssHeight
-uniform vec4 uCursorState; // x, y, visible, buttons
-uniform vec4 uCursorMeta; // type, bloomAttenuation, reserved
+uniform vec2 uResolution;
+uniform vec2 uInvResolution;
+uniform float uTime;
+uniform float uScanlineIntensity;
+uniform float uSlotMaskIntensity;
+uniform float uVignetteStrength;
+uniform float uBaseBloomIntensity;
+uniform float uAberrationStrength;
+uniform float uNoiseIntensity;
+uniform float uDevicePixelRatio;
+uniform float uBloomThreshold;
+uniform float uBloomSoftness;
+uniform float uK1;
+uniform float uK2;
+uniform vec2 uCssSize;
+uniform vec2 uInvCssSize;
+uniform vec4 uCursorState;
+uniform vec4 uCursorMeta;
 
 in vec2 vUv;
 out vec4 fragColor;
@@ -25,14 +36,30 @@ vec2 cssToSceneUv(vec2 css, float dpr, vec2 invResolution) {
   return vec2(css.x * dpr * invResolution.x, css.y * dpr * invResolution.y);
 }
 
-vec2 warpSampleUv(vec2 uv, float aspect, float k1, float k2) {
+float safeAspect(vec2 res) {
+  float aspect = 1.0;
+  if (res.y > 0.0) {
+    aspect = res.x / res.y;
+  }
+  return aspect;
+}
+
+vec2 flipUvIfNeeded(vec2 uv, bool doFlip) {
+  float y = uv.y;
+  if (doFlip) {
+    y = 1.0 - uv.y;
+  }
+  return vec2(uv.x, y);
+}
+
+vec2 warpBrownConrady(vec2 uv, float aspect, float k1, float k2) {
   vec2 p = uv * 2.0 - vec2(1.0);
   p.x *= aspect;
   float r2 = dot(p, p);
   float scale = 1.0 + k1 * r2 + k2 * r2 * r2;
-  p *= scale;
-  p.x /= aspect;
-  return p * 0.5 + vec2(0.5);
+  vec2 q = p * scale;
+  q.x /= aspect;
+  return q * 0.5 + vec2(0.5);
 }
 
 float vignetteMask(vec2 css, vec2 invCss) {
@@ -52,59 +79,41 @@ float cursorRadius(float cursorType) {
 }
 
 void main() {
-  vec2 uv = clampUv(vUv);
-  vec2 resolution = uResolution.xy;
-  vec2 invResolution = uResolution.zw;
-  float time = uTiming.x;
-  float scanlineIntensity = uTiming.y;
-  float slotMaskIntensity = uTiming.z;
-  float vignetteStrength = uTiming.w;
-  float baseBloomIntensity = uEffects.x;
-  float aberrationStrength = uEffects.y;
-  float noiseIntensity = uEffects.z;
-  float devicePixelRatio = uEffects.w;
-  float bloomThreshold = uBloomParams.x;
-  float bloomSoftness = uBloomParams.y;
-  float k1 = uBloomParams.z;
-  float k2 = uBloomParams.w;
-  vec2 cssSize = uCssMetrics.xy;
-  vec2 invCss = uCssMetrics.zw;
-  vec4 cursor = uCursorState;
-  vec4 cursorMeta = uCursorMeta;
-
-  float bloomIntensity = baseBloomIntensity * cursorMeta.y;
-
-  float aspect = uResolution.y > 0.0 ? uResolution.x / uResolution.y : 1.0;
-  vec2 warpedUv = warpSampleUv(uv, aspect, k1, k2);
+  vec2 uv0 = flipUvIfNeeded(vUv, false);
+  vec2 uv = clampUv(uv0);
+  float aspect = safeAspect(uResolution);
+  vec2 warpedUv = warpBrownConrady(uv, aspect, uK1, uK2);
   bool outside = warpedUv.x < 0.0 || warpedUv.x > 1.0 || warpedUv.y < 0.0 || warpedUv.y > 1.0;
   vec2 clampedWarp = clampUv(warpedUv);
-  vec2 cssCoord = clampCss(clampedWarp * cssSize, cssSize);
-  vec2 sceneUv = clampUv(cssToSceneUv(cssCoord, devicePixelRatio, invResolution));
+  vec2 cssCoord = clampCss(clampedWarp * uCssSize, uCssSize);
+  vec2 sceneUv = clampUv(cssToSceneUv(cssCoord, uDevicePixelRatio, uInvResolution));
   vec3 color = texture(uScene, sceneUv).rgb;
 
-  if (aberrationStrength > 0.0001) {
-    vec2 center = cssCoord - cssSize * 0.5;
+  float bloomIntensity = uBaseBloomIntensity * uCursorMeta.y;
+
+  if (uAberrationStrength > 0.0001) {
+    vec2 center = cssCoord - uCssSize * 0.5;
     float magnitude = max(length(center), 0.001);
     vec2 direction = center / magnitude;
-    float offsetAmount = aberrationStrength * 6.0;
-    vec2 redCss = clampCss(cssCoord + direction * offsetAmount, cssSize);
-    vec2 blueCss = clampCss(cssCoord - direction * offsetAmount, cssSize);
-    vec2 redUv = clampUv(cssToSceneUv(redCss, devicePixelRatio, invResolution));
-    vec2 blueUv = clampUv(cssToSceneUv(blueCss, devicePixelRatio, invResolution));
+    float offsetAmount = uAberrationStrength * 6.0;
+    vec2 redCss = clampCss(cssCoord + direction * offsetAmount, uCssSize);
+    vec2 blueCss = clampCss(cssCoord - direction * offsetAmount, uCssSize);
+    vec2 redUv = clampUv(cssToSceneUv(redCss, uDevicePixelRatio, uInvResolution));
+    vec2 blueUv = clampUv(cssToSceneUv(blueCss, uDevicePixelRatio, uInvResolution));
     float redSample = texture(uScene, redUv).r;
     float blueSample = texture(uScene, blueUv).b;
-    color.r = mix(color.r, redSample, min(0.85, aberrationStrength * 0.85));
-    color.b = mix(color.b, blueSample, min(0.85, aberrationStrength * 0.85));
+    color.r = mix(color.r, redSample, min(0.85, uAberrationStrength * 0.85));
+    color.b = mix(color.b, blueSample, min(0.85, uAberrationStrength * 0.85));
   }
 
-  if (scanlineIntensity > 0.0001) {
-    float line = sin(cssCoord.y * devicePixelRatio * 3.14159265);
-    float mask = mix(1.0, 0.55 + 0.45 * line * line, scanlineIntensity);
+  if (uScanlineIntensity > 0.0001) {
+    float line = sin(cssCoord.y * uDevicePixelRatio * 3.14159265);
+    float mask = mix(1.0, 0.55 + 0.45 * line * line, uScanlineIntensity);
     color *= mask;
   }
 
-  if (slotMaskIntensity > 0.0001) {
-    int triad = int(floor(cssCoord.x * devicePixelRatio)) % 3;
+  if (uSlotMaskIntensity > 0.0001) {
+    int triad = int(floor(cssCoord.x * uDevicePixelRatio)) % 3;
     vec3 slotMask = vec3(0.35);
     if (triad == 0) {
       slotMask.r = 1.0;
@@ -113,48 +122,51 @@ void main() {
     } else {
       slotMask.b = 1.0;
     }
-    color *= mix(vec3(1.0), slotMask, slotMaskIntensity);
+    color *= mix(vec3(1.0), slotMask, uSlotMaskIntensity);
   }
 
   if (bloomIntensity > 0.0001) {
     vec3 accum = vec3(0.0);
     vec2 taps[5];
     taps[0] = vec2(0.0);
-    taps[1] = vec2(invResolution.x * 2.0, 0.0);
-    taps[2] = vec2(-invResolution.x * 2.0, 0.0);
-    taps[3] = vec2(0.0, invResolution.y * 2.0);
-    taps[4] = vec2(0.0, -invResolution.y * 2.0);
+    taps[1] = vec2(uInvResolution.x * 2.0, 0.0);
+    taps[2] = vec2(-uInvResolution.x * 2.0, 0.0);
+    taps[3] = vec2(0.0, uInvResolution.y * 2.0);
+    taps[4] = vec2(0.0, -uInvResolution.y * 2.0);
     for (int i = 0; i < 5; i++) {
       vec2 sampleUv = clampUv(sceneUv + taps[i]);
       accum += texture(uScene, sampleUv).rgb;
     }
     accum /= 5.0;
     float luminance = dot(accum, vec3(0.2126, 0.7152, 0.0722));
-    float weight = smoothstep(bloomThreshold, 1.0, luminance);
-    color = mix(color, accum, weight * bloomIntensity * bloomSoftness);
+    float weight = smoothstep(uBloomThreshold, 1.0, luminance);
+    color = mix(color, accum, weight * bloomIntensity * uBloomSoftness);
   }
 
-  float vignetteWeight = outside ? 1.0 : vignetteStrength;
+  float vignetteWeight = uVignetteStrength;
+  if (outside) {
+    vignetteWeight = 1.0;
+  }
   if (vignetteWeight > 0.0001) {
-    float vig = vignetteMask(cssCoord, invCss);
+    float vig = vignetteMask(cssCoord, uInvCssSize);
     color *= mix(1.0, vig, clamp(vignetteWeight, 0.0, 1.0));
   }
 
-  if (noiseIntensity > 0.0001) {
-    float noise = fract(sin(dot(cssCoord, vec2(12.9898, 78.233)) + time * 12.345) * 43758.5453);
-    float grain = (noise - 0.5) * noiseIntensity;
+  if (uNoiseIntensity > 0.0001) {
+    float noise = fract(sin(dot(cssCoord, vec2(12.9898, 78.233)) + uTime * 12.345) * 43758.5453);
+    float grain = (noise - 0.5) * uNoiseIntensity;
     color += vec3(grain);
   }
 
-  if (cursor.z > 0.5) {
-    vec2 cursorUv = clampUv(cssToSceneUv(cursor.xy, devicePixelRatio, invResolution));
-    vec2 diff = vec2((uv.x - cursorUv.x) * resolution.x, (uv.y - cursorUv.y) * resolution.y);
-    float radius = cursorRadius(cursorMeta.x) * devicePixelRatio;
+  if (uCursorState.z > 0.5) {
+    vec2 cursorUv = clampUv(cssToSceneUv(uCursorState.xy, uDevicePixelRatio, uInvResolution));
+    vec2 diff = vec2((uv.x - cursorUv.x) * uResolution.x, (uv.y - cursorUv.y) * uResolution.y);
+    float radius = cursorRadius(uCursorMeta.x) * uDevicePixelRatio;
     float dist = length(diff);
     float ring = smoothstep(radius + 1.5, radius - 1.5, dist);
     float fill = smoothstep(radius * 0.4, radius * 0.1, dist);
     float alpha = max(ring, fill * 0.4);
-    float pressed = step(0.5, cursor.w);
+    float pressed = step(0.5, uCursorState.w);
     vec3 tint = mix(vec3(1.0), vec3(0.85, 1.0, 0.85), pressed);
     color = mix(color, tint, alpha);
   }
