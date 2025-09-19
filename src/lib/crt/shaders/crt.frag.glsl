@@ -44,22 +44,14 @@ float safeAspect(vec2 res) {
   return aspect;
 }
 
-vec2 flipUvIfNeeded(vec2 uv, bool doFlip) {
-  float y = uv.y;
-  if (doFlip) {
-    y = 1.0 - uv.y;
+vec2 undistort(vec2 p, float k1, float k2) {
+  vec2 u = p;
+  for (int i = 0; i < 3; i++) {
+    float r2 = dot(u, u);
+    float f = max(1.0 + k1 * r2 + k2 * r2 * r2, 1e-3);
+    u = p / f;
   }
-  return vec2(uv.x, y);
-}
-
-vec2 warpBrownConrady(vec2 uv, float aspect, float k1, float k2) {
-  vec2 p = uv * 2.0 - vec2(1.0);
-  p.x *= aspect;
-  float r2 = dot(p, p);
-  float scale = 1.0 + k1 * r2 + k2 * r2 * r2;
-  vec2 q = p * scale;
-  q.x /= aspect;
-  return q * 0.5 + vec2(0.5);
+  return u;
 }
 
 float vignetteMask(vec2 css, vec2 invCss) {
@@ -79,15 +71,18 @@ float cursorRadius(float cursorType) {
 }
 
 void main() {
-  vec2 uv0 = flipUvIfNeeded(vUv, false);
-  vec2 uv = clampUv(uv0);
+  vec2 uvDisplay = clampUv(vUv);
   float aspect = safeAspect(uResolution);
-  vec2 warpedUv = warpBrownConrady(uv, aspect, uK1, uK2);
-  bool outside = warpedUv.x < 0.0 || warpedUv.x > 1.0 || warpedUv.y < 0.0 || warpedUv.y > 1.0;
-  vec2 clampedWarp = clampUv(warpedUv);
-  vec2 cssCoord = clampCss(clampedWarp * uCssSize, uCssSize);
+  vec2 p = uvDisplay * 2.0 - vec2(1.0);
+  p.x *= aspect;
+  vec2 u = undistort(p, uK1, uK2);
+  u.x /= aspect;
+  vec2 uvSample = u * 0.5 + vec2(0.5);
+  bool outside = any(lessThan(uvSample, vec2(0.0))) || any(greaterThan(uvSample, vec2(1.0)));
+  vec2 clampedSample = clampUv(uvSample);
+  vec2 cssCoord = clampCss(clampedSample * uCssSize, uCssSize);
   vec2 sceneUv = clampUv(cssToSceneUv(cssCoord, uDevicePixelRatio, uInvResolution));
-  vec3 color = texture(uScene, sceneUv).rgb;
+  vec3 color = outside ? vec3(0.0) : texture(uScene, sceneUv).rgb;
 
   float bloomIntensity = uBaseBloomIntensity * uCursorMeta.y;
 
@@ -160,7 +155,7 @@ void main() {
 
   if (uCursorState.z > 0.5) {
     vec2 cursorUv = clampUv(cssToSceneUv(uCursorState.xy, uDevicePixelRatio, uInvResolution));
-    vec2 diff = vec2((uv.x - cursorUv.x) * uResolution.x, (uv.y - cursorUv.y) * uResolution.y);
+    vec2 diff = vec2((uvDisplay.x - cursorUv.x) * uResolution.x, (uvDisplay.y - cursorUv.y) * uResolution.y);
     float radius = cursorRadius(uCursorMeta.x) * uDevicePixelRatio;
     float dist = length(diff);
     float ring = smoothstep(radius + 1.5, radius - 1.5, dist);

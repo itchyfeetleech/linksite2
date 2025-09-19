@@ -4,36 +4,40 @@ export interface GeometryParams {
   dpr: number;
   k1: number;
   k2: number;
+  flipY?: boolean;
 }
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
-const solveRadius = (distorted: number, k1: number, k2: number) => {
-  if (distorted === 0) {
-    return 0;
-  }
+const safeAspect = (width: number, height: number) => (height > 0 ? width / height : 1);
 
-  let radius = distorted;
-  for (let i = 0; i < 8; i += 1) {
-    const r2 = radius * radius;
-    const r4 = r2 * r2;
-    const factor = 1 + k1 * r2 + k2 * r4;
-    const value = radius * factor - distorted;
-    const derivative = factor + radius * (2 * k1 * radius + 4 * k2 * r2 * radius);
-    if (Math.abs(derivative) < 1e-6) {
-      break;
-    }
-    radius -= value / derivative;
-  }
-  return radius;
+const distortNormalized = (px: number, py: number, k1: number, k2: number) => {
+  const r2 = px * px + py * py;
+  const r4 = r2 * r2;
+  const factor = 1 + k1 * r2 + k2 * r4;
+  return {
+    x: px * factor,
+    y: py * factor
+  };
 };
 
-const normalize = (coord: number, size: number) => (coord / size) * 2 - 1;
+export const undistortNormalized = (px: number, py: number, k1: number, k2: number) => {
+  let ux = px;
+  let uy = py;
+  for (let i = 0; i < 3; i += 1) {
+    const r2 = ux * ux + uy * uy;
+    const r4 = r2 * r2;
+    const factor = Math.max(1 + k1 * r2 + k2 * r4, 1e-3);
+    ux = px / factor;
+    uy = py / factor;
+  }
+  return { x: ux, y: uy };
+};
 
-const denormalize = (value: number, size: number) => ((value + 1) * 0.5) * size;
+const maybeFlip = (value: number, flip: boolean | undefined) => (flip ? 1 - value : value);
 
 export const mapDomToScreen = (x: number, y: number, params: GeometryParams) => {
-  const { width, height, k1, k2 } = params;
+  const { width, height, k1, k2, flipY } = params;
   const safeWidth = Number.isFinite(width) && width > 0 ? width : 0;
   const safeHeight = Number.isFinite(height) && height > 0 ? height : 0;
 
@@ -44,29 +48,26 @@ export const mapDomToScreen = (x: number, y: number, params: GeometryParams) => 
     };
   }
 
-  const aspect = width / height;
-
-  const normX = normalize(x, width);
-  const normY = normalize(y, height);
-  let px = normX * aspect;
-  let py = normY;
-  const r2 = px * px + py * py;
-  const r4 = r2 * r2;
-  const factor = 1 + k1 * r2 + k2 * r4;
-  px *= factor;
-  py *= factor;
-
-  const distortedX = px / aspect;
-  const distortedY = py;
+  const aspect = safeAspect(safeWidth, safeHeight);
+  const uvX = clamp(x, 0, safeWidth) / safeWidth;
+  const uvY = clamp(y, 0, safeHeight) / safeHeight;
+  const flippedUvY = maybeFlip(uvY, flipY);
+  const px = (uvX * 2 - 1) * aspect;
+  const py = flippedUvY * 2 - 1;
+  const distorted = distortNormalized(px, py, k1, k2);
+  const undoesAspectX = distorted.x / aspect;
+  const warpedUvX = clamp((undoesAspectX + 1) * 0.5, 0, 1);
+  const warpedUvY = clamp((distorted.y + 1) * 0.5, 0, 1);
+  const finalUvY = maybeFlip(warpedUvY, flipY);
 
   return {
-    x: clamp(denormalize(distortedX, width), 0, width),
-    y: clamp(denormalize(distortedY, height), 0, height)
+    x: warpedUvX * safeWidth,
+    y: finalUvY * safeHeight
   };
 };
 
 export const mapScreenToDom = (x: number, y: number, params: GeometryParams) => {
-  const { width, height, k1, k2 } = params;
+  const { width, height, k1, k2, flipY } = params;
   const safeWidth = Number.isFinite(width) && width > 0 ? width : 0;
   const safeHeight = Number.isFinite(height) && height > 0 ? height : 0;
 
@@ -77,37 +78,29 @@ export const mapScreenToDom = (x: number, y: number, params: GeometryParams) => 
     };
   }
 
-  const aspect = width / height;
-
-  const normX = normalize(x, width);
-  const normY = normalize(y, height);
-  let px = normX * aspect;
-  let py = normY;
-  const radiusPrime = Math.sqrt(px * px + py * py);
-
-  if (radiusPrime === 0) {
-    return { x: width * 0.5, y: height * 0.5 };
-  }
-
-  const radius = solveRadius(radiusPrime, k1, k2);
-  const scale = radius / radiusPrime;
-  px *= scale;
-  py *= scale;
-
-  const undistortedX = px / aspect;
-  const undistortedY = py;
+  const aspect = safeAspect(safeWidth, safeHeight);
+  const uvX = clamp(x, 0, safeWidth) / safeWidth;
+  const uvY = clamp(y, 0, safeHeight) / safeHeight;
+  const flippedUvY = maybeFlip(uvY, flipY);
+  const px = (uvX * 2 - 1) * aspect;
+  const py = flippedUvY * 2 - 1;
+  const undistorted = undistortNormalized(px, py, k1, k2);
+  const unscaledX = undistorted.x / aspect;
+  const baseUvX = clamp((unscaledX + 1) * 0.5, 0, 1);
+  const baseUvY = clamp((undistorted.y + 1) * 0.5, 0, 1);
+  const finalUvY = maybeFlip(baseUvY, flipY);
 
   return {
-    x: clamp(denormalize(undistortedX, width), 0, width),
-    y: clamp(denormalize(undistortedY, height), 0, height)
+    x: baseUvX * safeWidth,
+    y: finalUvY * safeHeight
   };
 };
 
 export const warpScreenUvToDomCss = (uvX: number, uvY: number, params: GeometryParams) => {
   const { width, height } = params;
-  const x = clamp(uvX, 0, 1) * width;
-  const y = clamp(uvY, 0, 1) * height;
-  return mapScreenToDom(x, y, params);
+  const cssX = clamp(uvX, 0, 1) * width;
+  const cssY = clamp(uvY, 0, 1) * height;
+  return mapScreenToDom(cssX, cssY, params);
 };
 
 export const warpDomCssToScreenCss = (x: number, y: number, params: GeometryParams) =>

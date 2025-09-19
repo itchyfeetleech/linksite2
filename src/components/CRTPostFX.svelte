@@ -18,7 +18,7 @@
     type PointerActivityState
   } from '../lib/crt/eventProxy';
   import type { CRTGpuRenderer, CRTRenderMode } from '../lib/crt/types';
-  import { mapDomToScreen } from '../lib/crt/geometryMath';
+  import { mapDomToScreen, undistortNormalized } from '../lib/crt/geometryMath';
   import { UNIFORM_FLOAT_COUNT, UNIFORM_OFFSETS } from '../lib/crt/types';
   import { createCoordSpace } from '../lib/crt/coordSpace';
 
@@ -54,6 +54,14 @@
     touch: 1,
     pen: 2
   };
+
+  const DEFAULT_BARREL_K1 = -0.006;
+  const DEFAULT_BARREL_K2 = 0.0;
+  const MAX_BARREL_K1 = 0.02;
+  const MAX_BARREL_K2 = 0.005;
+  const WARP_SAMPLE_POINTS = [0.1, 0.5, 0.9];
+
+  const clamp01 = (value: number) => Math.min(Math.max(value, 0), 1);
 
   const FLIP_Y_SHADER_WEBGPU = true;
   const UNPACK_FLIP_Y_WEBGL = true;
@@ -107,6 +115,9 @@
   let pendingModeCheck = false;
   let destroyed = false;
 
+  let warpDisabled = false;
+  let showWarpGrid = false;
+
   let warpMode = 'shader';
   if (typeof document !== 'undefined') {
     const declared = document.documentElement.dataset.crtWarpMode;
@@ -115,7 +126,14 @@
     }
   }
 
-  const geometryParams = { width: cssWidth, height: cssHeight, dpr, k1: 0, k2: 0 };
+  const geometryParams = {
+    width: cssWidth,
+    height: cssHeight,
+    dpr,
+    k1: DEFAULT_BARREL_K1,
+    k2: DEFAULT_BARREL_K2,
+    flipY: false
+  };
 
   const matrixHash = (matrix: Float32Array) => {
     let hash = 2166136261 >>> 0;
@@ -162,6 +180,7 @@
   const updateOrientationInfo = () => {
     const flipYShader = renderer?.mode === 'webgpu' ? FLIP_Y_SHADER_WEBGPU : false;
     const unpackFlipY = renderer?.mode === 'webgl2' ? UNPACK_FLIP_Y_WEBGL : false;
+    geometryParams.flipY = flipYShader;
     orientationInfo = {
       flipYCapture: FLIP_Y_CAPTURE,
       flipYShader,
@@ -240,28 +259,111 @@
 
   const updateBadge = () => {
     const base = BADGE_LABELS[renderMode] ?? renderMode.toUpperCase();
-    badgeLabel = effectState?.plainMode ? `${base} · Plain` : base;
+    badgeLabel = effectState?.plainMode ? `${base} - Plain` : base;
+  };
+
+  const logWarpSamples = (k1: number, k2: number) => {
+    const width = geometryParams.width;
+    const height = geometryParams.height;
+
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      return;
+    }
+
+    const aspect = height > 0 ? width / height : 1;
+    let minX = 1;
+    let minY = 1;
+    let maxX = 0;
+    let maxY = 0;
+
+    for (const sampleY of WARP_SAMPLE_POINTS) {
+      for (const sampleX of WARP_SAMPLE_POINTS) {
+        const uvDisplayX = sampleX;
+        const uvDisplayY = geometryParams.flipY ? 1 - sampleY : sampleY;
+        const px = (uvDisplayX * 2 - 1) * aspect;
+        const py = uvDisplayY * 2 - 1;
+        const undistorted = undistortNormalized(px, py, k1, k2);
+        const sampleUvX = (undistorted.x / aspect + 1) * 0.5;
+        const sampleUvY = (undistorted.y + 1) * 0.5;
+        minX = Math.min(minX, sampleUvX);
+        minY = Math.min(minY, sampleUvY);
+        maxX = Math.max(maxX, sampleUvX);
+        maxY = Math.max(maxY, sampleUvY);
+      }
+    }
+
+    const bounds = {
+      min: { x: Number(minX.toFixed(4)), y: Number(minY.toFixed(4)) },
+      max: { x: Number(maxX.toFixed(4)), y: Number(maxY.toFixed(4)) }
+    };
+
+    const withinBounds =
+      bounds.min.x >= -0.02 &&
+      bounds.min.y >= -0.02 &&
+      bounds.max.x <= 1.02 &&
+      bounds.max.y <= 1.02;
+
+    if (withinBounds) {
+      logger.debug('CRT postFX warp samples', bounds);
+    } else {
+      logger.warn('CRT postFX warp samples clamped', bounds);
+    }
   };
 
   const applyBarrelCoefficients = () => {
     const state = effectState;
     const enabled = Boolean(state && !state.plainMode && state.barrel);
-    let k1 = 0;
-    let k2 = 0;
-    if (enabled) {
-      const slider = Math.max(-1, Math.min(1, state?.intensity.barrel ?? 0));
-      k1 = slider * 0.035;
-      k2 = slider * 0.012;
-      if (Math.abs(k1) > 0.05 || Math.abs(k2) > 0.02) {
-        logger.warn('CRT postFX barrel coefficients out of range; resetting', { slider, k1, k2 });
+    const slider = clamp01(state?.intensity.barrel ?? 0.5);
+    let k1 = DEFAULT_BARREL_K1;
+    let k2 = DEFAULT_BARREL_K2;
+
+    if (state) {
+      if (enabled) {
+        k1 = -0.012 * slider;
+        k2 = 0.004 * slider;
+      } else {
         k1 = 0;
         k2 = 0;
       }
     }
+
+    if (warpDisabled) {
+      k1 = 0;
+      k2 = 0;
+    }
+
+    if (Math.abs(k1) > MAX_BARREL_K1 || Math.abs(k2) > MAX_BARREL_K2) {
+      logger.warn('CRT postFX barrel coefficients clamped', { slider, k1, k2 });
+      k1 = 0;
+      k2 = 0;
+    }
+
     geometryParams.k1 = k1;
     geometryParams.k2 = k2;
     setScalar(K1_OFFSET, k1);
     setScalar(K2_OFFSET, k2);
+    logWarpSamples(k1, k2);
+  };
+
+  const setWarpDisabledState = (value: boolean) => {
+    warpDisabled = value;
+    applyBarrelCoefficients();
+  };
+
+  const handleWarpToggleChange = (event: Event) => {
+    const target = event.currentTarget as HTMLInputElement | null;
+    if (!target) {
+      return;
+    }
+    setWarpDisabledState(target.checked);
+  };
+
+  const handleWarpGridToggleChange = (event: Event) => {
+    const target = event.currentTarget as HTMLInputElement | null;
+    if (!target) {
+      return;
+    }
+    showWarpGrid = target.checked;
   };
 
   const updateEffectUniforms = () => {
@@ -321,8 +423,10 @@
     setVec2(INV_CSS_OFFSET, 1 / cssWidth, 1 / cssHeight);
 
     geometryParams.width = cssWidth;
-    geometryParams.height = cssHeight;
-    geometryParams.dpr = dpr;
+   geometryParams.height = cssHeight;
+   geometryParams.dpr = dpr;
+
+    applyBarrelCoefficients();
 
     renderer?.resize(coordSnapshot.textureWidth, coordSnapshot.textureHeight, cssWidth, cssHeight);
     void renderer?.updateGeometry(geometryParams);
@@ -908,6 +1012,17 @@
       </div>
     </div>
   </div>
+  <div class="crt-postfx__debug-controls" aria-hidden="true">
+    <label class="crt-postfx__debug-toggle">
+      <input type="checkbox" checked={warpDisabled} on:change={handleWarpToggleChange} />
+      <span>Warp off</span>
+    </label>
+    <label class="crt-postfx__debug-toggle">
+      <input type="checkbox" checked={showWarpGrid} on:change={handleWarpGridToggleChange} />
+      <span>Show warp grid</span>
+    </label>
+  </div>
+  <div class="crt-postfx__warp-grid-overlay" data-visible={showWarpGrid} aria-hidden="true"></div>
   <div class="crt-postfx__debug-grid" aria-hidden="true">
     {#each [1, 2, 3, 4, 5, 6, 7, 8, 9] as cell}
       <span class="crt-postfx__debug-cell">{cell}</span>
@@ -1053,6 +1168,64 @@
     font-size: 0.55rem;
     line-height: 1.4;
     color: rgba(214, 255, 235, 0.9);
+  }
+
+  .crt-postfx__debug-controls {
+    position: fixed;
+    top: 1rem;
+    left: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 0.55rem 0.75rem;
+    border-radius: 0.6rem;
+    background: rgba(10, 24, 18, 0.78);
+    color: rgba(214, 255, 235, 0.9);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.12em;
+    pointer-events: auto;
+    box-shadow: 0 0 0 1px rgba(12, 48, 34, 0.35);
+    z-index: 52;
+  }
+
+  .crt-postfx__debug-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    text-transform: uppercase;
+  }
+
+  .crt-postfx__debug-toggle input {
+    accent-color: rgba(137, 235, 193, 0.9);
+  }
+
+  .crt-postfx__debug-toggle span {
+    color: rgba(166, 255, 208, 0.9);
+  }
+
+  .crt-postfx__warp-grid-overlay {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background-image:
+      linear-gradient(to right, rgba(120, 220, 180, 0.22) 0px, rgba(120, 220, 180, 0.22) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(120, 220, 180, 0.22) 0px, rgba(120, 220, 180, 0.22) 1px, transparent 1px),
+      linear-gradient(to right, transparent 0, transparent calc(50% - 0.5px), rgba(120, 220, 180, 0.32) calc(50% - 0.5px), rgba(120, 220, 180, 0.32) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
+      linear-gradient(to bottom, transparent 0, transparent calc(50% - 0.5px), rgba(120, 220, 180, 0.32) calc(50% - 0.5px), rgba(120, 220, 180, 0.32) calc(50% + 0.5px), transparent calc(50% + 0.5px));
+    background-size:
+      calc(100% / 20) 100%,
+      100% calc(100% / 12),
+      100% 100%,
+      100% 100%;
+    opacity: 0;
+    transition: opacity 120ms ease-in-out;
+    mix-blend-mode: screen;
+    z-index: 51;
+  }
+
+  .crt-postfx__warp-grid-overlay[data-visible='true'] {
+    opacity: 0.42;
   }
 
   .crt-postfx__debug-grid {

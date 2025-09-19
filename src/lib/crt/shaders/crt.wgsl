@@ -47,18 +47,18 @@ fn safe_aspect(res: vec2<f32>) -> f32 {
   return select(1.0, res.x / res.y, res.y > 0.0);
 }
 
-fn flip_uv_if_needed(uv: vec2<f32>, doFlip: bool) -> vec2<f32> {
+fn flip_uv(uv: vec2<f32>, doFlip: bool) -> vec2<f32> {
   return vec2<f32>(uv.x, select(uv.y, 1.0 - uv.y, doFlip));
 }
 
-fn warp_brown_conrady(uv: vec2<f32>, aspect: f32, k1: f32, k2: f32) -> vec2<f32> {
-  var p = uv * 2.0 - vec2<f32>(1.0, 1.0);
-  p.x *= aspect;
-  let r2 = dot(p, p);
-  let scale = 1.0 + k1 * r2 + k2 * r2 * r2;
-  var q = p * scale;
-  q.x /= aspect;
-  return q * 0.5 + vec2<f32>(0.5, 0.5);
+fn undistort(p: vec2<f32>, k1: f32, k2: f32) -> vec2<f32> {
+  var u = p;
+  for (var i = 0; i < 3; i = i + 1) {
+    let r2 = dot(u, u);
+    let f = max(1.0 + k1 * r2 + k2 * r2 * r2, 1e-3);
+    u = p / f;
+  }
+  return u;
 }
 
 fn vignetteMask(css: vec2<f32>, invCss: vec2<f32>) -> f32 {
@@ -89,21 +89,23 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
   let position = positions[vertexIndex];
   output.position = vec4<f32>(position, 0.0, 1.0);
   let uv = position * 0.5 + vec2<f32>(0.5, 0.5);
-  output.uv = flip_uv_if_needed(uv, false);
+  output.uv = flip_uv(uv, false);
   return output;
 }
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-  let uv0 = flip_uv_if_needed(input.uv, true);
-  let uv = clampUv(uv0);
+  let uv0 = flip_uv(input.uv, true);
+  let uvDisplay = clampUv(uv0);
   let aspect = safe_aspect(ubo.resolution);
-  let warpedUv = warp_brown_conrady(uv, aspect, ubo.k1, ubo.k2);
-  let outside =
-    warpedUv.x < 0.0 || warpedUv.x > 1.0 ||
-    warpedUv.y < 0.0 || warpedUv.y > 1.0;
-  let clampedWarp = clampUv(warpedUv);
-  let cssCoord = clampCss(clampedWarp * ubo.cssSize, ubo.cssSize);
+  var p = uvDisplay * 2.0 - vec2<f32>(1.0, 1.0);
+  p.x *= aspect;
+  var u = undistort(p, ubo.k1, ubo.k2);
+  u.x /= aspect;
+  let uvSample = u * 0.5 + vec2<f32>(0.5, 0.5);
+  let outside = any(uvSample < vec2<f32>(0.0, 0.0)) || any(uvSample > vec2<f32>(1.0, 1.0));
+  let clampedSample = clampUv(uvSample);
+  let cssCoord = clampCss(clampedSample * ubo.cssSize, ubo.cssSize);
   let sceneUv = clampUv(cssToSceneUv(cssCoord, ubo.devicePixelRatio, ubo.invResolution));
   var color = textureSampleLevel(sceneTexture, sceneSampler, sceneUv, 0.0).rgb;
 
@@ -179,7 +181,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
   if (ubo.cursorState.z > 0.5) {
     let cursorUv = clampUv(cssToSceneUv(ubo.cursorState.xy, ubo.devicePixelRatio, ubo.invResolution));
-    let diff = vec2<f32>((uv.x - cursorUv.x) * ubo.resolution.x, (uv.y - cursorUv.y) * ubo.resolution.y);
+    let diff = vec2<f32>((uvDisplay.x - cursorUv.x) * ubo.resolution.x, (uvDisplay.y - cursorUv.y) * ubo.resolution.y);
     let radius = cursorRadius(ubo.cursorMeta.x) * ubo.devicePixelRatio;
     let dist = length(diff);
     let ring = smoothstep(radius + 1.5, radius - 1.5, dist);

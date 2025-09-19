@@ -101,22 +101,23 @@ export const createEventProxy = ({
       };
     }
 
-    const { x: uvX, y: uvY } = applyMat3(coordSpace.cssToUv, x, y);
+    const rawUv = applyMat3(coordSpace.cssToUv, x, y);
     if (!params) {
       return {
         domX: x,
         domY: y,
-        uvX,
-        uvY
+        uvX: rawUv.x,
+        uvY: rawUv.y
       };
     }
 
     const mapped = mapScreenToDom(x, y, params);
+    const domUv = applyMat3(coordSpace.cssToUv, mapped.x, mapped.y);
     return {
       domX: mapped.x,
       domY: mapped.y,
-      uvX,
-      uvY
+      uvX: domUv.x,
+      uvY: domUv.y
     };
   };
 

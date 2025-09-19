@@ -29,7 +29,7 @@
   $: aberrationStrength =
     cssModeEnabled && state && !state.plainMode && state.aberration ? state.intensity.aberration : 0;
   $: barrelStrength =
-    cssModeEnabled && state && !state.plainMode && state.barrel ? Math.abs(state.intensity.barrel) : 0;
+    cssModeEnabled && state && !state.plainMode && state.barrel ? state.intensity.barrel : 0;
   $: glowOverlayOpacity = glowStrength ? Math.min(glowStrength + 0.1, 0.85) : 0;
   let stageFilter = 'none';
   $: stageFilter = (() => {
@@ -60,8 +60,7 @@
     const value = state?.intensity[key] ?? 0;
 
     if (key === 'barrel') {
-      const signed = value >= 0 ? `+${value.toFixed(2)}` : value.toFixed(2);
-      return signed;
+      return `${Math.round(value * 100)}%`;
     }
 
     return `${Math.round(value * 100)}%`;
@@ -174,8 +173,8 @@
               <input
                 class="slider"
                 type="range"
-                min={key === 'barrel' ? -1 : 0}
-                max={key === 'barrel' ? 1 : 1}
+                min={0}
+                max={1}
                 step={key === 'barrel' ? 0.01 : 0.05}
                 value={state?.intensity[key] ?? 0}
                 on:input={(event) => onIntensityInput(key, event)}
