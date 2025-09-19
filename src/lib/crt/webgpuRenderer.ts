@@ -382,13 +382,18 @@ export class WebGpuRenderer implements CRTGpuRenderer {
       return {
         gpuSubmitMs: 0,
         gpuFrameMs: this.hasTimestampResult ? this.lastGpuFrameMs : 0,
-        timestampAccurate: this.hasTimestampResult
+        timestampAccurate: this.hasTimestampResult,
+        stages: {
+          uniformUpload: 0,
+          renderPass: 0,
+          submit: 0
+        }
       };
     }
 
-    this.device.queue.writeBuffer(this.uniformBuffer, 0, uniforms.buffer, uniforms.byteOffset, uniforms.byteLength);
-
     const cpuStart = performance.now();
+    this.device.queue.writeBuffer(this.uniformBuffer, 0, uniforms.buffer, uniforms.byteOffset, uniforms.byteLength);
+    const uploadEnd = performance.now();
     const currentTexture = this.context.getCurrentTexture();
     const encoder = this.device.createCommandEncoder();
 
@@ -453,6 +458,7 @@ export class WebGpuRenderer implements CRTGpuRenderer {
     pass.setBindGroup(0, this.bindGroup);
     pass.draw(3, 1, 0, 0);
     pass.end();
+    const passEnd = performance.now();
 
     if (canWriteTimestamp && this.timestampQuerySet) {
       try {
@@ -519,10 +525,17 @@ export class WebGpuRenderer implements CRTGpuRenderer {
 
     const gpuFrameMs = this.hasTimestampResult ? this.lastGpuFrameMs : gpuSubmitMs;
 
+    const stages = {
+      uniformUpload: Math.max(0, uploadEnd - cpuStart),
+      renderPass: Math.max(0, passEnd - uploadEnd),
+      submit: Math.max(0, submitEnd - passEnd)
+    } satisfies Record<string, number>;
+
     return {
       gpuSubmitMs,
       gpuFrameMs,
-      timestampAccurate: this.hasTimestampResult
+      timestampAccurate: this.hasTimestampResult,
+      stages
     };
   }
 

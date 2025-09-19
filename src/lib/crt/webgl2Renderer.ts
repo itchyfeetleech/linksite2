@@ -201,13 +201,20 @@ export class WebGl2Renderer implements CRTGpuRenderer {
       return {
         gpuSubmitMs: 0,
         gpuFrameMs: this.hasTimerResult ? this.lastGpuFrameMs : 0,
-        timestampAccurate: this.hasTimerResult
+        timestampAccurate: this.hasTimerResult,
+        stages: {
+          setup: 0,
+          bind: 0,
+          draw: 0,
+          flush: 0
+        }
       };
     }
 
     const cpuStart = performance.now();
     const width = Math.max(1, Math.floor(uniforms[RESOLUTION_OFFSET]));
     const height = Math.max(1, Math.floor(uniforms[RESOLUTION_OFFSET + 1]));
+    const setupEnd = performance.now();
 
     this.app.viewport(0, 0, width, height);
     this.drawCall
@@ -230,6 +237,8 @@ export class WebGl2Renderer implements CRTGpuRenderer {
       .uniform('uCursorState', uniforms.subarray(CURSOR_STATE_OFFSET, CURSOR_STATE_OFFSET + 4))
       .uniform('uCursorMeta', uniforms.subarray(CURSOR_META_OFFSET, CURSOR_META_OFFSET + 4));
 
+    const bindEnd = performance.now();
+
     if (this.timerQueryExt && !this.currentTimerQuery) {
       const gl = this.app.gl as WebGL2RenderingContext;
       this.currentTimerQuery = gl.createQuery();
@@ -240,6 +249,8 @@ export class WebGl2Renderer implements CRTGpuRenderer {
 
     this.app.clear();
     this.drawCall.draw();
+
+    const drawEnd = performance.now();
 
     if (this.timerQueryExt && this.currentTimerQuery) {
       const gl = this.app.gl as WebGL2RenderingContext;
@@ -253,10 +264,18 @@ export class WebGl2Renderer implements CRTGpuRenderer {
 
     const gpuFrameMs = this.hasTimerResult ? this.lastGpuFrameMs : gpuSubmitMs;
 
+    const stages = {
+      setup: Math.max(0, setupEnd - cpuStart),
+      bind: Math.max(0, bindEnd - setupEnd),
+      draw: Math.max(0, drawEnd - bindEnd),
+      flush: Math.max(0, gpuSubmitMs - (drawEnd - cpuStart))
+    } satisfies Record<string, number>;
+
     return {
       gpuSubmitMs,
       gpuFrameMs,
-      timestampAccurate: this.hasTimerResult
+      timestampAccurate: this.hasTimerResult,
+      stages
     };
   }
 

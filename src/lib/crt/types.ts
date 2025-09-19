@@ -67,5 +67,6 @@ export interface RendererTimings {
   gpuSubmitMs: number;
   gpuFrameMs: number;
   timestampAccurate: boolean;
+  stages?: Record<string, number>;
 }
 

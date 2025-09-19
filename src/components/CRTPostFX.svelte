@@ -67,6 +67,8 @@
   ];
 
   const formatMs = (value: number) => `${value.toFixed(2)}ms`;
+  const roundRecord = (record: Record<string, number>) =>
+    Object.fromEntries(Object.entries(record).map(([key, value]) => [key, Number(value.toFixed(2))]));
 
   const DEFAULT_BARREL_K1 = -0.006;
   const DEFAULT_BARREL_K2 = 0.0;
@@ -130,6 +132,11 @@
 
   let warpDisabled = false;
   let showWarpGrid = false;
+  let stageAverage: Record<string, number> = {};
+  let stageP95: Record<string, number> = {};
+  let stageKeys: string[] = [];
+  let avgFps = 0;
+  let latestFps = 0;
 
   let warpMode = 'shader';
   if (typeof document !== 'undefined') {
@@ -158,6 +165,12 @@
   let perfLogCounter = 0;
   let internalScale = 1;
   let qualityTier: 'Ultra' | 'High' | 'Balanced' | 'Low' = 'Balanced';
+
+  $: stageAverage = healthSnapshot.stageAverage ?? {};
+  $: stageP95 = healthSnapshot.stageP95 ?? {};
+  $: stageKeys = Array.from(new Set([...Object.keys(stageAverage), ...Object.keys(stageP95)])).sort();
+  $: avgFps = healthSnapshot.average?.fps ?? (healthSnapshot.average.totalMs > 0 ? 1000 / healthSnapshot.average.totalMs : 0);
+  $: latestFps = healthSnapshot.latest?.fps ?? (healthSnapshot.latest.totalMs > 0 ? 1000 / healthSnapshot.latest.totalMs : 0);
 
   const matrixHash = (matrix: Float32Array) => {
     let hash = 2166136261 >>> 0;
@@ -540,7 +553,10 @@
 
       const gpuSubmitMs = renderTimings.gpuSubmitMs + uploadMs;
       const gpuFrameMs = renderTimings.gpuFrameMs;
-      const totalMs = performance.now() - frameCpuStart;
+      const cpuFrameMs = performance.now() - frameCpuStart;
+      const gpuCost = Math.max(gpuFrameMs, gpuSubmitMs);
+      const totalMs = captureMs + Math.max(gpuCost, cpuFrameMs) + proxyMs;
+      const fps = totalMs > 0 ? 1000 / totalMs : 0;
 
       const frameTimings: FrameTimings = {
         captureMs,
@@ -548,7 +564,12 @@
         gpuFrameMs,
         proxyMs,
         totalMs,
-        timestamp: now
+        timestamp: now,
+        stages: renderTimings.stages ? { ...renderTimings.stages } : undefined,
+        fps,
+        mode: renderer.mode,
+        dpr: coordSnapshot.dpr,
+        internalScale
       };
 
       gpuTimingAccurate = renderTimings.timestampAccurate;
@@ -560,7 +581,13 @@
         logger.info('CRT postFX health summary', {
           tier: qualityTier,
           internalScale: Number(internalScale.toFixed(3)),
+          mode: healthSnapshot.latest.mode ?? renderMode,
+          dpr: Number((healthSnapshot.latest.dpr ?? coordSnapshot.dpr).toFixed(2)),
           gpuTimer: gpuTimingAccurate ? 'timestamp' : 'cpu',
+          fps: {
+            latest: Number(latestFps.toFixed(2)),
+            average: Number(avgFps.toFixed(2))
+          },
           avg: {
             captureMs: Number(healthSnapshot.average.captureMs.toFixed(2)),
             gpuSubmitMs: Number(healthSnapshot.average.gpuSubmitMs.toFixed(2)),
@@ -574,6 +601,10 @@
             gpuFrameMs: Number(healthSnapshot.p95.gpuFrameMs.toFixed(2)),
             proxyMs: Number(healthSnapshot.p95.proxyMs.toFixed(2)),
             totalMs: Number(healthSnapshot.p95.totalMs.toFixed(2))
+          },
+          stages: {
+            average: roundRecord(stageAverage),
+            p95: roundRecord(stageP95)
           }
         });
       }
@@ -1104,12 +1135,16 @@
         <dd>{qualityTier}</dd>
       </div>
       <div>
+        <dt>mode</dt>
+        <dd>{healthSnapshot.latest.mode ?? renderMode}</dd>
+      </div>
+      <div>
         <dt>dpr</dt>
-        <dd>{coordSnapshot.dpr.toFixed(2)}</dd>
+        <dd>{(healthSnapshot.latest.dpr ?? coordSnapshot.dpr).toFixed(2)}</dd>
       </div>
       <div>
         <dt>internalScale</dt>
-        <dd>{internalScale.toFixed(2)}</dd>
+        <dd>{(healthSnapshot.latest.internalScale ?? internalScale).toFixed(2)}</dd>
       </div>
       <div>
         <dt>samples</dt>
@@ -1118,6 +1153,14 @@
       <div>
         <dt>gpuTimer</dt>
         <dd>{gpuTimingAccurate ? 'timestamp' : 'cpu'}</dd>
+      </div>
+      <div>
+        <dt>fps(avg)</dt>
+        <dd>{avgFps.toFixed(1)}</dd>
+      </div>
+      <div>
+        <dt>fps(latest)</dt>
+        <dd>{latestFps.toFixed(1)}</dd>
       </div>
     </dl>
     <div class="crt-postfx__health-grid">
@@ -1155,6 +1198,20 @@
         </dl>
       </div>
     </div>
+    {#if stageKeys.length}
+      <div class="crt-postfx__health-stages">
+        <h3>GPU Stages (ms)</h3>
+        <div class="crt-postfx__health-stage-grid">
+          {#each stageKeys as key}
+            <div class="crt-postfx__health-stage">
+              <span class="crt-postfx__health-stage-label">{key}</span>
+              <span class="crt-postfx__health-stage-value">avg {formatMs(stageAverage[key] ?? 0)}</span>
+              <span class="crt-postfx__health-stage-value">p95 {formatMs(stageP95[key] ?? 0)}</span>
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
   </div>
   <div class="crt-postfx__debug-controls" aria-hidden="true">
     <label class="crt-postfx__debug-toggle">
@@ -1389,6 +1446,42 @@
     margin: 0;
     font-variant-numeric: tabular-nums;
     color: rgba(214, 255, 235, 0.85);
+  }
+
+  .crt-postfx__health-stages {
+    margin-top: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .crt-postfx__health-stage-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 0.45rem;
+  }
+
+  .crt-postfx__health-stage {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    padding: 0.45rem 0.55rem;
+    border-radius: 0.5rem;
+    background: rgba(6, 24, 16, 0.65);
+    box-shadow: inset 0 0 0 1px rgba(120, 220, 180, 0.18);
+  }
+
+  .crt-postfx__health-stage-label {
+    font-size: 0.58rem;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: rgba(154, 255, 210, 0.86);
+  }
+
+  .crt-postfx__health-stage-value {
+    font-variant-numeric: tabular-nums;
+    color: rgba(214, 255, 235, 0.88);
+    font-size: 0.58rem;
   }
 
   .crt-postfx__debug-controls {
