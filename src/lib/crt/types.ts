@@ -50,7 +50,7 @@ export type UniformOffsets = typeof UNIFORM_OFFSETS;
 export interface CRTGpuRenderer {
   readonly mode: Exclude<CRTRenderMode, 'css'>;
   init(canvas: HTMLCanvasElement): Promise<void>;
-  render(uniforms: Float32Array): void;
+  render(uniforms: Float32Array): RendererTimings;
   resize(width: number, height: number, cssWidth: number, cssHeight: number): void;
   updateTexture(frame: CaptureFrame): Promise<void>;
   updateGeometry(params: {
@@ -61,5 +61,11 @@ export interface CRTGpuRenderer {
     k2: number;
   }): Promise<void>;
   destroy(): void;
+}
+
+export interface RendererTimings {
+  gpuSubmitMs: number;
+  gpuFrameMs: number;
+  timestampAccurate: boolean;
 }
 

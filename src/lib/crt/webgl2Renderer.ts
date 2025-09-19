@@ -1,7 +1,8 @@
 import vertSource from './shaders/crt.vert.glsl?raw';
 import fragSource from './shaders/crt.frag.glsl?raw';
-import type { CaptureFrame, CRTGpuRenderer } from './types';
+import type { CaptureFrame, CRTGpuRenderer, RendererTimings } from './types';
 import { UNIFORM_OFFSETS } from './types';
+import { logger } from '../logger';
 
 const {
   resolution: RESOLUTION_OFFSET,
@@ -38,6 +39,11 @@ export class WebGl2Renderer implements CRTGpuRenderer {
   private sceneTexture: any = null;
   private sceneSize: TextureSize | null = null;
   private canvas: HTMLCanvasElement | null = null;
+  private timerQueryExt: EXT_disjoint_timer_query_webgl2 | EXT_disjoint_timer_query | null = null;
+  private pendingTimerQueries: WebGLQuery[] = [];
+  private hasTimerResult = false;
+  private lastGpuFrameMs = 0;
+  private currentTimerQuery: WebGLQuery | null = null;
 
   async init(canvas: HTMLCanvasElement) {
     if (!this.picoGL) {
@@ -66,6 +72,13 @@ export class WebGl2Renderer implements CRTGpuRenderer {
     this.canvas = canvas;
     const app = PicoGL.createApp(canvas, { context });
     this.app = app.clearColor(0, 0, 0, 1);
+
+    this.timerQueryExt =
+      context.getExtension('EXT_disjoint_timer_query_webgl2') ??
+      context.getExtension('EXT_disjoint_timer_query');
+    if (!this.timerQueryExt) {
+      logger.info('CRT WebGL2 timer query extension unavailable; using CPU timings');
+    }
 
     const program = this.app.createProgram(vertSource, fragSource);
     const vertexArray = this.app.createVertexArray();
@@ -127,6 +140,39 @@ export class WebGl2Renderer implements CRTGpuRenderer {
     this.sceneSize = { width, height };
   }
 
+  private pollTimerQueries() {
+    if (!this.timerQueryExt || !this.app) {
+      return;
+    }
+
+    const gl = this.app.gl as WebGL2RenderingContext;
+    const ext = this.timerQueryExt;
+
+    while (this.pendingTimerQueries.length > 0) {
+      const query = this.pendingTimerQueries[0];
+      const available = gl.getQueryParameter(query, gl.QUERY_RESULT_AVAILABLE) as boolean;
+      const disjoint = gl.getParameter(ext.GPU_DISJOINT_EXT) as boolean;
+
+      if (!available) {
+        break;
+      }
+
+      this.pendingTimerQueries.shift();
+
+      if (disjoint) {
+        gl.deleteQuery(query);
+        continue;
+      }
+
+      const elapsedNs = gl.getQueryParameter(query, gl.QUERY_RESULT) as number;
+      if (Number.isFinite(elapsedNs) && elapsedNs >= 0) {
+        this.lastGpuFrameMs = elapsedNs / 1_000_000;
+        this.hasTimerResult = true;
+      }
+      gl.deleteQuery(query);
+    }
+  }
+
   async updateTexture(frame: CaptureFrame) {
     if (!this.app) {
       frame.bitmap.close();
@@ -150,11 +196,16 @@ export class WebGl2Renderer implements CRTGpuRenderer {
 
   async updateGeometry(_params: { width: number; height: number; dpr: number; k1: number; k2: number }) {}
 
-  render(uniforms: Float32Array) {
+  render(uniforms: Float32Array): RendererTimings {
     if (!this.app || !this.drawCall) {
-      return;
+      return {
+        gpuSubmitMs: 0,
+        gpuFrameMs: this.hasTimerResult ? this.lastGpuFrameMs : 0,
+        timestampAccurate: this.hasTimerResult
+      };
     }
 
+    const cpuStart = performance.now();
     const width = Math.max(1, Math.floor(uniforms[RESOLUTION_OFFSET]));
     const height = Math.max(1, Math.floor(uniforms[RESOLUTION_OFFSET + 1]));
 
@@ -179,8 +230,34 @@ export class WebGl2Renderer implements CRTGpuRenderer {
       .uniform('uCursorState', uniforms.subarray(CURSOR_STATE_OFFSET, CURSOR_STATE_OFFSET + 4))
       .uniform('uCursorMeta', uniforms.subarray(CURSOR_META_OFFSET, CURSOR_META_OFFSET + 4));
 
+    if (this.timerQueryExt && !this.currentTimerQuery) {
+      const gl = this.app.gl as WebGL2RenderingContext;
+      this.currentTimerQuery = gl.createQuery();
+      if (this.currentTimerQuery) {
+        gl.beginQuery(this.timerQueryExt.TIME_ELAPSED_EXT, this.currentTimerQuery);
+      }
+    }
+
     this.app.clear();
     this.drawCall.draw();
+
+    if (this.timerQueryExt && this.currentTimerQuery) {
+      const gl = this.app.gl as WebGL2RenderingContext;
+      gl.endQuery(this.timerQueryExt.TIME_ELAPSED_EXT);
+      this.pendingTimerQueries.push(this.currentTimerQuery);
+      this.currentTimerQuery = null;
+    }
+
+    const gpuSubmitMs = performance.now() - cpuStart;
+    this.pollTimerQueries();
+
+    const gpuFrameMs = this.hasTimerResult ? this.lastGpuFrameMs : gpuSubmitMs;
+
+    return {
+      gpuSubmitMs,
+      gpuFrameMs,
+      timestampAccurate: this.hasTimerResult
+    };
   }
 
   resize(width: number, height: number, cssWidth: number, cssHeight: number) {
@@ -205,6 +282,19 @@ export class WebGl2Renderer implements CRTGpuRenderer {
   destroy() {
     this.sceneTexture?.delete();
     this.drawCall?.delete();
+    if (this.timerQueryExt && this.app) {
+      const gl = this.app.gl as WebGL2RenderingContext;
+      for (const query of this.pendingTimerQueries) {
+        gl.deleteQuery(query);
+      }
+      if (this.currentTimerQuery) {
+        gl.deleteQuery(this.currentTimerQuery);
+      }
+    }
+    this.pendingTimerQueries = [];
+    this.currentTimerQuery = null;
+    this.timerQueryExt = null;
+    this.hasTimerResult = false;
     if (this.app) {
       this.app.gl.getExtension('WEBGL_lose_context')?.loseContext();
     }

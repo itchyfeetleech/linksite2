@@ -1,5 +1,5 @@
 import shaderSource from './shaders/crt.wgsl?raw';
-import type { CaptureFrame, CRTGpuRenderer } from './types';
+import type { CaptureFrame, CRTGpuRenderer, RendererTimings } from './types';
 import { UNIFORM_FLOAT_COUNT } from './types';
 import { logger } from '../logger';
 
@@ -36,6 +36,13 @@ export class WebGpuRenderer implements CRTGpuRenderer {
   private canvas: HTMLCanvasElement | null = null;
   private format: GPUTextureFormat | null = null;
   private warnedCompilationInfoUnavailable = false;
+
+  private supportsTimestampQuery = false;
+  private timestampQuerySet: GPUQuerySet | null = null;
+  private timestampPeriodNs = 1;
+  private hasTimestampResult = false;
+  private lastGpuFrameMs = 0;
+  private queryCursor = 0;
 
   private async getCompilationInfo(
     module: GPUShaderModule,
@@ -188,11 +195,39 @@ export class WebGpuRenderer implements CRTGpuRenderer {
       throw new Error('WebGPU adapter not found');
     }
 
+    const supportsTimestampQuery = adapter.features?.has?.('timestamp-query') ?? false;
+    const requiredFeatures: GPUFeatureName[] = [];
+    if (supportsTimestampQuery) {
+      requiredFeatures.push('timestamp-query');
+    }
+
     const device = await adapter.requestDevice({
-      label: 'crt-webgpu-device'
+      label: 'crt-webgpu-device',
+      requiredFeatures
     });
     this.device = device;
     this.canvas = canvas;
+
+    this.supportsTimestampQuery = supportsTimestampQuery && device.features.has('timestamp-query');
+    if (this.supportsTimestampQuery) {
+      try {
+        this.timestampQuerySet = device.createQuerySet({
+          label: 'crt-timestamp-query-set',
+          type: 'timestamp',
+          count: 8
+        });
+      } catch (error) {
+        this.supportsTimestampQuery = false;
+        logger.warn('CRT WebGPU timestamp query initialisation failed; falling back to CPU timings', error);
+      }
+
+      const adapterLimits = (adapter as unknown as { limits?: { timestampPeriod?: number } }).limits;
+      const deviceLimits = (device.limits as unknown as { timestampPeriod?: number }) ?? {};
+      const period = adapterLimits?.timestampPeriod ?? deviceLimits.timestampPeriod;
+      if (typeof period === 'number' && Number.isFinite(period) && period > 0) {
+        this.timestampPeriodNs = period;
+      }
+    }
 
     await this.runWgslSelfTest(device);
 
@@ -341,15 +376,36 @@ export class WebGpuRenderer implements CRTGpuRenderer {
 
   async updateGeometry(_params: { width: number; height: number; dpr: number; k1: number; k2: number }) {}
 
-  render(uniforms: Float32Array) {
+  render(uniforms: Float32Array): RendererTimings {
     if (!this.device || !this.context || !this.pipeline || !this.uniformBuffer || !this.bindGroup || !this.format) {
-      return;
+      return {
+        gpuSubmitMs: 0,
+        gpuFrameMs: this.hasTimestampResult ? this.lastGpuFrameMs : 0,
+        timestampAccurate: this.hasTimestampResult
+      };
     }
 
     this.device.queue.writeBuffer(this.uniformBuffer, 0, uniforms.buffer, uniforms.byteOffset, uniforms.byteLength);
 
+    const cpuStart = performance.now();
     const currentTexture = this.context.getCurrentTexture();
     const encoder = this.device.createCommandEncoder();
+
+    let queryBaseIndex = 0;
+    let queryEndIndex = 1;
+    let timestampBuffer: GPUBuffer | null = null;
+
+    if (this.supportsTimestampQuery && this.timestampQuerySet) {
+      const pairCount = Math.max(1, Math.floor(this.timestampQuerySet.count / 2));
+      this.queryCursor = this.queryCursor % pairCount;
+      queryBaseIndex = this.queryCursor * 2;
+      queryEndIndex = queryBaseIndex + 1;
+      if (queryEndIndex >= this.timestampQuerySet.count) {
+        queryEndIndex = 0;
+      }
+      encoder.writeTimestamp(this.timestampQuerySet, queryBaseIndex);
+    }
+
     const pass = encoder.beginRenderPass({
       colorAttachments: [
         {
@@ -366,7 +422,63 @@ export class WebGpuRenderer implements CRTGpuRenderer {
     pass.draw(3, 1, 0, 0);
     pass.end();
 
-    this.device.queue.submit([encoder.finish()]);
+    if (this.supportsTimestampQuery && this.timestampQuerySet) {
+      encoder.writeTimestamp(this.timestampQuerySet, queryEndIndex);
+      timestampBuffer = this.device.createBuffer({
+        label: 'crt-timestamp-buffer',
+        size: 16,
+        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+      });
+      encoder.resolveQuerySet(this.timestampQuerySet, queryBaseIndex, 2, timestampBuffer, 0);
+      const pairCount = Math.max(1, Math.floor(this.timestampQuerySet.count / 2));
+      this.queryCursor = (this.queryCursor + 1) % pairCount;
+    }
+
+    const commandBuffer = encoder.finish();
+    const submitStart = performance.now();
+    this.device.queue.submit([commandBuffer]);
+    const submitEnd = performance.now();
+
+    if (timestampBuffer) {
+      const bufferRef = timestampBuffer;
+      bufferRef.mapAsync(GPUMapMode.READ).then(() => {
+        try {
+          const data = new BigUint64Array(bufferRef.getMappedRange());
+          const start = data[0];
+          const end = data[1];
+          const delta = end > start ? end - start : BigInt(0);
+          const ms = Number(delta) * this.timestampPeriodNs / 1_000_000;
+          if (Number.isFinite(ms) && ms >= 0) {
+            this.lastGpuFrameMs = ms;
+            this.hasTimestampResult = true;
+          }
+        } catch (error) {
+          logger.warn('CRT WebGPU timestamp read parse failed', error);
+        } finally {
+          bufferRef.unmap();
+          bufferRef.destroy();
+        }
+      }).catch((error) => {
+        logger.warn('CRT WebGPU timestamp buffer map failed', error);
+        try {
+          bufferRef.destroy();
+        } catch {
+          // ignore
+        }
+      });
+    }
+
+    const encodeMs = submitStart - cpuStart;
+    const queueMs = submitEnd - submitStart;
+    const gpuSubmitMs = encodeMs + queueMs;
+
+    const gpuFrameMs = this.hasTimestampResult ? this.lastGpuFrameMs : gpuSubmitMs;
+
+    return {
+      gpuSubmitMs,
+      gpuFrameMs,
+      timestampAccurate: this.hasTimestampResult
+    };
   }
 
   resize(width: number, height: number, cssWidth: number, cssHeight: number) {
@@ -393,6 +505,9 @@ export class WebGpuRenderer implements CRTGpuRenderer {
     this.sceneTextureSize = null;
     this.uniformBuffer?.destroy();
     this.uniformBuffer = null;
+    this.timestampQuerySet?.destroy?.();
+    this.timestampQuerySet = null;
+    this.hasTimestampResult = false;
     (this.device as (GPUDevice & { destroy?: () => void }) | null)?.destroy?.();
     this.device = null;
     this.context = null;

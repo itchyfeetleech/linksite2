@@ -17,10 +17,11 @@
     type EventProxyController,
     type PointerActivityState
   } from '../lib/crt/eventProxy';
-  import type { CRTGpuRenderer, CRTRenderMode } from '../lib/crt/types';
+  import type { CRTGpuRenderer, CRTRenderMode, RendererTimings } from '../lib/crt/types';
   import { mapDomToScreen, undistortNormalized } from '../lib/crt/geometryMath';
   import { UNIFORM_FLOAT_COUNT, UNIFORM_OFFSETS } from '../lib/crt/types';
   import { createCoordSpace } from '../lib/crt/coordSpace';
+  import { createPerfMonitor, type FrameTimings, type PerfSnapshot } from '../lib/crt/perfMonitor';
 
   const BADGE_LABELS: Record<CRTRenderMode, string> = {
     webgpu: 'WebGPU',
@@ -54,6 +55,18 @@
     touch: 1,
     pen: 2
   };
+
+  type HealthMetricKey = 'captureMs' | 'gpuSubmitMs' | 'gpuFrameMs' | 'proxyMs' | 'totalMs';
+
+  const HEALTH_METRICS: Array<{ key: HealthMetricKey; label: string }> = [
+    { key: 'captureMs', label: 'Capture' },
+    { key: 'gpuSubmitMs', label: 'GPU Submit' },
+    { key: 'gpuFrameMs', label: 'GPU Frame' },
+    { key: 'proxyMs', label: 'Proxy' },
+    { key: 'totalMs', label: 'Total' }
+  ];
+
+  const formatMs = (value: number) => `${value.toFixed(2)}ms`;
 
   const DEFAULT_BARREL_K1 = -0.006;
   const DEFAULT_BARREL_K2 = 0.0;
@@ -134,6 +147,17 @@
     k2: DEFAULT_BARREL_K2,
     flipY: false
   };
+
+  const perfMonitor = createPerfMonitor();
+  let healthSnapshot: PerfSnapshot = perfMonitor.getSnapshot();
+  let pendingCaptureMs = 0;
+  let pendingUploadMs = 0;
+  let pendingProxyMs = 0;
+  let gpuTimingAccurate = false;
+  const PERF_LOG_INTERVAL = 180;
+  let perfLogCounter = 0;
+  let internalScale = 1;
+  let qualityTier: 'Ultra' | 'High' | 'Balanced' | 'Low' = 'Balanced';
 
   const matrixHash = (matrix: Float32Array) => {
     let hash = 2166136261 >>> 0;
@@ -450,6 +474,7 @@
   };
 
   const logProxyLatency = (value: number) => {
+    pendingProxyMs += value;
     proxyLatencyAccumulator += value;
     proxyLatencySamples += 1;
     if (proxyLatencySamples >= 30) {
@@ -492,6 +517,7 @@
       return;
     }
 
+    const frameCpuStart = performance.now();
     const delta = now - lastFrame;
     const minInterval = reduceMotion ? 1000 / 30 : 0;
     if (minInterval > 0 && delta < minInterval) {
@@ -501,7 +527,62 @@
 
     lastFrame = now;
     setScalar(TIME_OFFSET, now * 0.001);
-    renderer?.render(uniforms);
+
+    if (renderer) {
+      const renderTimings: RendererTimings = renderer.render(uniforms);
+      const captureMs = pendingCaptureMs;
+      const uploadMs = pendingUploadMs;
+      const proxyMs = pendingProxyMs;
+
+      pendingCaptureMs = 0;
+      pendingUploadMs = 0;
+      pendingProxyMs = 0;
+
+      const gpuSubmitMs = renderTimings.gpuSubmitMs + uploadMs;
+      const gpuFrameMs = renderTimings.gpuFrameMs;
+      const totalMs = performance.now() - frameCpuStart;
+
+      const frameTimings: FrameTimings = {
+        captureMs,
+        gpuSubmitMs,
+        gpuFrameMs,
+        proxyMs,
+        totalMs,
+        timestamp: now
+      };
+
+      gpuTimingAccurate = renderTimings.timestampAccurate;
+      healthSnapshot = perfMonitor.record(frameTimings);
+
+      perfLogCounter += 1;
+      if (healthSnapshot.samples >= 60 && perfLogCounter >= PERF_LOG_INTERVAL) {
+        perfLogCounter = 0;
+        logger.info('CRT postFX health summary', {
+          tier: qualityTier,
+          internalScale: Number(internalScale.toFixed(3)),
+          gpuTimer: gpuTimingAccurate ? 'timestamp' : 'cpu',
+          avg: {
+            captureMs: Number(healthSnapshot.average.captureMs.toFixed(2)),
+            gpuSubmitMs: Number(healthSnapshot.average.gpuSubmitMs.toFixed(2)),
+            gpuFrameMs: Number(healthSnapshot.average.gpuFrameMs.toFixed(2)),
+            proxyMs: Number(healthSnapshot.average.proxyMs.toFixed(2)),
+            totalMs: Number(healthSnapshot.average.totalMs.toFixed(2))
+          },
+          p95: {
+            captureMs: Number(healthSnapshot.p95.captureMs.toFixed(2)),
+            gpuSubmitMs: Number(healthSnapshot.p95.gpuSubmitMs.toFixed(2)),
+            gpuFrameMs: Number(healthSnapshot.p95.gpuFrameMs.toFixed(2)),
+            proxyMs: Number(healthSnapshot.p95.proxyMs.toFixed(2)),
+            totalMs: Number(healthSnapshot.p95.totalMs.toFixed(2))
+          }
+        });
+      }
+    } else {
+      pendingCaptureMs = 0;
+      pendingUploadMs = 0;
+      pendingProxyMs = 0;
+    }
+
     logFrameTime(delta);
 
     rafId = window.requestAnimationFrame(step);
@@ -580,13 +661,16 @@
 
   const handleCapture = async (frame: CaptureFrame, stats: CaptureStats) => {
     logCaptureDuration(stats.duration);
+    pendingCaptureMs += stats.duration;
     if (!renderer) {
       frame.bitmap.close();
       return;
     }
 
     try {
+      const uploadStart = performance.now();
       await renderer.updateTexture(frame);
+      pendingUploadMs += performance.now() - uploadStart;
       hasTexture = true;
 
       const captureDpr = frame.dpr || dpr;
@@ -1012,6 +1096,66 @@
       </div>
     </div>
   </div>
+  <div class="crt-postfx__health-panel" aria-hidden="true">
+    <h2>Health</h2>
+    <dl class="crt-postfx__health-meta">
+      <div>
+        <dt>tier</dt>
+        <dd>{qualityTier}</dd>
+      </div>
+      <div>
+        <dt>dpr</dt>
+        <dd>{coordSnapshot.dpr.toFixed(2)}</dd>
+      </div>
+      <div>
+        <dt>internalScale</dt>
+        <dd>{internalScale.toFixed(2)}</dd>
+      </div>
+      <div>
+        <dt>samples</dt>
+        <dd>{healthSnapshot.samples}</dd>
+      </div>
+      <div>
+        <dt>gpuTimer</dt>
+        <dd>{gpuTimingAccurate ? 'timestamp' : 'cpu'}</dd>
+      </div>
+    </dl>
+    <div class="crt-postfx__health-grid">
+      <div class="crt-postfx__health-column">
+        <h3>Latest</h3>
+        <dl>
+          {#each HEALTH_METRICS as metric}
+            <div>
+              <dt>{metric.label}</dt>
+              <dd>{formatMs(healthSnapshot.latest[metric.key])}</dd>
+            </div>
+          {/each}
+        </dl>
+      </div>
+      <div class="crt-postfx__health-column">
+        <h3>Average</h3>
+        <dl>
+          {#each HEALTH_METRICS as metric}
+            <div>
+              <dt>{metric.label}</dt>
+              <dd>{formatMs(healthSnapshot.average[metric.key])}</dd>
+            </div>
+          {/each}
+        </dl>
+      </div>
+      <div class="crt-postfx__health-column">
+        <h3>P95</h3>
+        <dl>
+          {#each HEALTH_METRICS as metric}
+            <div>
+              <dt>{metric.label}</dt>
+              <dd>{formatMs(healthSnapshot.p95[metric.key])}</dd>
+            </div>
+          {/each}
+        </dl>
+      </div>
+    </div>
+  </div>
   <div class="crt-postfx__debug-controls" aria-hidden="true">
     <label class="crt-postfx__debug-toggle">
       <input type="checkbox" checked={warpDisabled} on:change={handleWarpToggleChange} />
@@ -1168,6 +1312,83 @@
     font-size: 0.55rem;
     line-height: 1.4;
     color: rgba(214, 255, 235, 0.9);
+  }
+
+  .crt-postfx__health-panel {
+    position: fixed;
+    top: 4.5rem;
+    right: 1rem;
+    width: min(320px, 90vw);
+    padding: 0.75rem;
+    border-radius: 0.75rem;
+    background: rgba(10, 24, 18, 0.82);
+    color: rgba(214, 255, 235, 0.92);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.58rem;
+    letter-spacing: 0.05em;
+    line-height: 1.35;
+    pointer-events: none;
+    box-shadow: 0 0 0 1px rgba(12, 48, 34, 0.45);
+    backdrop-filter: blur(10px);
+    z-index: 52;
+  }
+
+  .crt-postfx__health-panel h2 {
+    margin: 0 0 0.5rem;
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: rgba(166, 255, 208, 0.9);
+  }
+
+  .crt-postfx__health-meta {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.35rem 0.6rem;
+    margin: 0 0 0.65rem;
+  }
+
+  .crt-postfx__health-meta dt {
+    text-transform: uppercase;
+    font-weight: 600;
+    color: rgba(137, 235, 193, 0.9);
+  }
+
+  .crt-postfx__health-meta dd {
+    margin: 0;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: rgba(214, 255, 235, 0.88);
+  }
+
+  .crt-postfx__health-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+
+  .crt-postfx__health-column h3 {
+    margin: 0 0 0.35rem;
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: rgba(154, 255, 210, 0.86);
+  }
+
+  .crt-postfx__health-column dl {
+    display: grid;
+    gap: 0.35rem;
+  }
+
+  .crt-postfx__health-column dt {
+    text-transform: uppercase;
+    color: rgba(137, 235, 193, 0.8);
+  }
+
+  .crt-postfx__health-column dd {
+    margin: 0;
+    font-variant-numeric: tabular-nums;
+    color: rgba(214, 255, 235, 0.85);
   }
 
   .crt-postfx__debug-controls {
