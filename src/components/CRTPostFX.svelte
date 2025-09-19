@@ -6,7 +6,8 @@
   import {
     createDomCapture,
     type CaptureStats,
-    type DomCaptureController
+    type DomCaptureController,
+    FLIP_Y_CAPTURE
   } from '../lib/crt/capture';
   import { createWebGpuRenderer } from '../lib/crt/webgpuRenderer';
   import { createWebGl2Renderer } from '../lib/crt/webgl2Renderer';
@@ -18,8 +19,9 @@
   } from '../lib/crt/eventProxy';
   import { createLutController } from '../lib/crt/lutController';
   import type { CRTGpuRenderer, CRTRenderMode } from '../lib/crt/types';
-  import type { LutResult } from '../lib/crt/geometryMath';
+  import { sampleLut, type LutResult } from '../lib/crt/geometryMath';
   import { UNIFORM_FLOAT_COUNT } from '../lib/crt/types';
+  import { createCoordSpace } from '../lib/crt/coordSpace';
 
   const BADGE_LABELS: Record<CRTRenderMode, string> = {
     webgpu: 'WebGPU',
@@ -41,8 +43,14 @@
     pen: 2
   };
 
+  const FLIP_Y_SHADER_WEBGPU = true;
+  const UNPACK_FLIP_Y_WEBGL = true;
+
   let container: HTMLDivElement | null = null;
   let canvas: HTMLCanvasElement | null = null;
+
+  const coordSpace = createCoordSpace();
+  let coordSnapshot = coordSpace.getSnapshot();
 
   let renderMode: CRTRenderMode = 'css';
   let badgeLabel = BADGE_LABELS.css;
@@ -67,9 +75,9 @@
   let rafId = 0;
   let lastFrame = 0;
 
-  let dpr = 1;
-  let cssWidth = 1;
-  let cssHeight = 1;
+  let dpr = coordSnapshot.dpr;
+  let cssWidth = coordSnapshot.cssWidth;
+  let cssHeight = coordSnapshot.cssHeight;
 
   let pointerDown = false;
 
@@ -88,9 +96,79 @@
   let pendingModeCheck = false;
   let destroyed = false;
 
-  const geometryParams = { width: 1, height: 1, dpr: 1, k1: 0, k2: 0 };
+  const geometryParams = { width: cssWidth, height: cssHeight, dpr, k1: 0, k2: 0 };
   let geometryRevision = 0;
   let geometryDirty = true;
+
+  const matrixHash = (matrix: Float32Array) => {
+    let hash = 2166136261 >>> 0;
+    for (let i = 0; i < matrix.length; i += 1) {
+      const value = Math.round(matrix[i] * 1e6);
+      hash ^= (value + 0x9e3779b9 + ((hash << 6) >>> 0) + (hash >>> 2)) >>> 0;
+      hash >>>= 0;
+    }
+    return hash.toString(16);
+  };
+
+  const formatMatrix = (matrix: number[]) => {
+    const rows = [matrix.slice(0, 3), matrix.slice(3, 6), matrix.slice(6, 9)];
+    return rows.map((row) => row.map((value) => value.toFixed(4)).join('  '));
+  };
+
+  let orientationInfo = {
+    flipYCapture: FLIP_Y_CAPTURE,
+    flipYShader: false,
+    unpackFlipY: false,
+    dpr: coordSnapshot.dpr,
+    cssToUv: Array.from(coordSnapshot.cssToUv),
+    uvToCss: Array.from(coordSnapshot.uvToCss),
+    cssToTexture: Array.from(coordSnapshot.cssToTexture),
+    textureToCss: Array.from(coordSnapshot.textureToCss)
+  } satisfies {
+    flipYCapture: boolean;
+    flipYShader: boolean;
+    unpackFlipY: boolean;
+    dpr: number;
+    cssToUv: number[];
+    uvToCss: number[];
+    cssToTexture: number[];
+    textureToCss: number[];
+  };
+
+  let lastOrientationFingerprint = '';
+
+  const updateOrientationInfo = () => {
+    orientationInfo = {
+      flipYCapture: FLIP_Y_CAPTURE,
+      flipYShader: renderer?.mode === 'webgpu' ? FLIP_Y_SHADER_WEBGPU : false,
+      unpackFlipY: renderer?.mode === 'webgl2' ? UNPACK_FLIP_Y_WEBGL : false,
+      dpr: coordSnapshot.dpr,
+      cssToUv: Array.from(coordSnapshot.cssToUv),
+      uvToCss: Array.from(coordSnapshot.uvToCss),
+      cssToTexture: Array.from(coordSnapshot.cssToTexture),
+      textureToCss: Array.from(coordSnapshot.textureToCss)
+    };
+  };
+
+  const logOrientationState = (reason: string) => {
+    const fingerprint = `${renderMode}:${matrixHash(coordSnapshot.cssToUv)}:${matrixHash(coordSnapshot.cssToTexture)}:${coordSnapshot.dpr.toFixed(4)}`;
+    if (fingerprint === lastOrientationFingerprint) {
+      return;
+    }
+    lastOrientationFingerprint = fingerprint;
+    logger.info('CRT postFX orientation', {
+      reason,
+      mode: renderMode,
+      flipYCapture: FLIP_Y_CAPTURE,
+      flipYShader: renderer?.mode === 'webgpu' ? FLIP_Y_SHADER_WEBGPU : false,
+      unpackFlipY: renderer?.mode === 'webgl2' ? UNPACK_FLIP_Y_WEBGL : false,
+      cssToUv: matrixHash(coordSnapshot.cssToUv),
+      cssToTexture: matrixHash(coordSnapshot.cssToTexture),
+      dpr: coordSnapshot.dpr
+    });
+  };
+
+  updateOrientationInfo();
 
   const setVec4 = (offset: number, a: number, b: number, c: number, d: number) => {
     uniforms[offset] = a;
@@ -213,14 +291,28 @@
     const nextDpr = window.devicePixelRatio || 1;
     const nextCssWidth = Math.max(1, Math.round(window.innerWidth));
     const nextCssHeight = Math.max(1, Math.round(window.innerHeight));
-    const deviceWidth = Math.max(1, Math.round(nextCssWidth * nextDpr));
-    const deviceHeight = Math.max(1, Math.round(nextCssHeight * nextDpr));
+    const deviceWidth = Math.max(1, Math.floor(nextCssWidth * nextDpr));
+    const deviceHeight = Math.max(1, Math.floor(nextCssHeight * nextDpr));
 
-    dpr = nextDpr;
-    cssWidth = nextCssWidth;
-    cssHeight = nextCssHeight;
+    coordSnapshot = coordSpace.update({
+      cssWidth: nextCssWidth,
+      cssHeight: nextCssHeight,
+      dpr: nextDpr,
+      textureWidth: deviceWidth,
+      textureHeight: deviceHeight
+    });
 
-    setVec4(RESOLUTION_OFFSET, deviceWidth, deviceHeight, 1 / deviceWidth, 1 / deviceHeight);
+    dpr = coordSnapshot.dpr;
+    cssWidth = coordSnapshot.cssWidth;
+    cssHeight = coordSnapshot.cssHeight;
+
+    setVec4(
+      RESOLUTION_OFFSET,
+      coordSnapshot.textureWidth,
+      coordSnapshot.textureHeight,
+      1 / coordSnapshot.textureWidth,
+      1 / coordSnapshot.textureHeight
+    );
     uniforms[EFFECTS_OFFSET + 3] = dpr;
     setVec4(CSS_OFFSET, cssWidth, cssHeight, 1 / cssWidth, 1 / cssHeight);
 
@@ -228,8 +320,10 @@
     geometryParams.height = cssHeight;
     geometryParams.dpr = dpr;
 
-    renderer?.resize(deviceWidth, deviceHeight, cssWidth, cssHeight);
+    renderer?.resize(coordSnapshot.textureWidth, coordSnapshot.textureHeight, cssWidth, cssHeight);
     geometryDirty = true;
+    updateOrientationInfo();
+    logOrientationState('resize');
   };
 
   const logCaptureDuration = (duration: number) => {
@@ -363,8 +457,16 @@
   };
 
   const handleCursorUpdate = (state: CursorState) => {
-    uniforms[CURSOR_STATE_OFFSET + 0] = state.domX;
-    uniforms[CURSOR_STATE_OFFSET + 1] = state.domY;
+    let cursorCssX = state.domX;
+    let cursorCssY = state.domY;
+    const lut = currentLut;
+    if (lut && lut.forward && lut.width > 0 && lut.height > 0) {
+      const warped = sampleLut(lut.forward, lut.width, lut.height, state.uvX, state.uvY);
+      cursorCssX = warped.x;
+      cursorCssY = warped.y;
+    }
+    uniforms[CURSOR_STATE_OFFSET + 0] = cursorCssX;
+    uniforms[CURSOR_STATE_OFFSET + 1] = cursorCssY;
     uniforms[CURSOR_STATE_OFFSET + 2] = state.visible ? 1 : 0;
     uniforms[CURSOR_STATE_OFFSET + 3] = state.buttons;
     uniforms[CURSOR_META_OFFSET + 0] = pointerIndex(state.pointerType);
@@ -384,19 +486,40 @@
       await renderer.updateTexture(frame);
       hasTexture = true;
 
-      const captureCssWidth = Math.max(1, Math.round(frame.width / (frame.dpr || 1)));
-      const captureCssHeight = Math.max(1, Math.round(frame.height / (frame.dpr || 1)));
-      if (captureCssWidth !== cssWidth || captureCssHeight !== cssHeight) {
-        cssWidth = captureCssWidth;
-        cssHeight = captureCssHeight;
-        setVec4(CSS_OFFSET, cssWidth, cssHeight, 1 / cssWidth, 1 / cssHeight);
-        geometryParams.width = cssWidth;
-        geometryParams.height = cssHeight;
-        const deviceWidth = Math.max(1, Math.round(cssWidth * dpr));
-        const deviceHeight = Math.max(1, Math.round(cssHeight * dpr));
-        renderer.resize(deviceWidth, deviceHeight, cssWidth, cssHeight);
-        geometryDirty = true;
-      }
+      const captureDpr = frame.dpr || dpr;
+      const captureCssWidth = Math.max(1, Math.round(frame.width / (captureDpr || 1)));
+      const captureCssHeight = Math.max(1, Math.round(frame.height / (captureDpr || 1)));
+
+      coordSnapshot = coordSpace.update({
+        cssWidth: captureCssWidth,
+        cssHeight: captureCssHeight,
+        dpr: captureDpr,
+        textureWidth: frame.width,
+        textureHeight: frame.height
+      });
+
+      dpr = coordSnapshot.dpr;
+      cssWidth = coordSnapshot.cssWidth;
+      cssHeight = coordSnapshot.cssHeight;
+
+      setVec4(
+        RESOLUTION_OFFSET,
+        coordSnapshot.textureWidth,
+        coordSnapshot.textureHeight,
+        1 / coordSnapshot.textureWidth,
+        1 / coordSnapshot.textureHeight
+      );
+      uniforms[EFFECTS_OFFSET + 3] = dpr;
+      setVec4(CSS_OFFSET, cssWidth, cssHeight, 1 / cssWidth, 1 / cssHeight);
+
+      geometryParams.width = cssWidth;
+      geometryParams.height = cssHeight;
+      geometryParams.dpr = dpr;
+
+      renderer.resize(coordSnapshot.textureWidth, coordSnapshot.textureHeight, cssWidth, cssHeight);
+      geometryDirty = true;
+      updateOrientationInfo();
+      logOrientationState('capture');
 
       updateRenderState();
       if (shouldRender()) {
@@ -445,6 +568,8 @@
     uniforms[CURSOR_STATE_OFFSET + 2] = 0;
     uniforms[CURSOR_META_OFFSET + 1] = 1;
     setCanvasInteractionEnabled(false);
+    updateOrientationInfo();
+    logOrientationState('teardown');
   };
 
   const initializeGpu = async (mode: Exclude<CRTRenderMode, 'css'>) => {
@@ -468,6 +593,7 @@
         currentLut
           ? { width: currentLut.width, height: currentLut.height, data: currentLut.inverse }
           : null,
+      getCoordSpace: () => coordSnapshot,
       onCursor: handleCursorUpdate,
       onActivity: handlePointerActivity,
       logLatency: (value) => logProxyLatency(value)
@@ -490,6 +616,8 @@
 
     canvasHidden = true;
     updateRenderState();
+    updateOrientationInfo();
+    logOrientationState('mode-init');
 
     if (typeof document !== 'undefined' && !document.hidden) {
       domCapture
@@ -537,6 +665,8 @@
       renderMode = 'css';
       crtEffects.setRenderMode('css');
       canvasHidden = true;
+      updateOrientationInfo();
+      logOrientationState('css-mode');
       updateRenderState();
       return;
     }
@@ -552,6 +682,8 @@
       renderMode = 'css';
       crtEffects.setRenderMode('css');
       canvasHidden = true;
+      updateOrientationInfo();
+      logOrientationState('css-fallback');
     }
 
     updateRenderState();
@@ -679,6 +811,8 @@
       renderMode = 'css';
       canvasHidden = true;
       crtEffects.setRenderMode('css');
+      updateOrientationInfo();
+      logOrientationState('init-error');
     });
 
     return () => {
@@ -723,6 +857,50 @@
     data-interactive={interactive}
   ></canvas>
   <span class="crt-postfx__badge" data-mode={renderMode}>{badgeLabel}</span>
+  <div class="crt-postfx__orientation-panel" aria-hidden="true">
+    <h2>Orientation</h2>
+    <dl>
+      <div>
+        <dt>flipY_capture</dt>
+        <dd>{orientationInfo.flipYCapture ? 'true' : 'false'}</dd>
+      </div>
+      <div>
+        <dt>flipY_shader</dt>
+        <dd>{orientationInfo.flipYShader ? 'true' : 'false'}</dd>
+      </div>
+      <div>
+        <dt>unpackFlipY</dt>
+        <dd>{orientationInfo.unpackFlipY ? 'true' : 'false'}</dd>
+      </div>
+      <div>
+        <dt>DPR</dt>
+        <dd>{orientationInfo.dpr.toFixed(3)}</dd>
+      </div>
+    </dl>
+    <div class="crt-postfx__matrix-list">
+      <div class="crt-postfx__matrix">
+        <h3>CSS → UV</h3>
+        <pre>{formatMatrix(orientationInfo.cssToUv).join('\n')}</pre>
+      </div>
+      <div class="crt-postfx__matrix">
+        <h3>UV → CSS</h3>
+        <pre>{formatMatrix(orientationInfo.uvToCss).join('\n')}</pre>
+      </div>
+      <div class="crt-postfx__matrix">
+        <h3>CSS → Texture</h3>
+        <pre>{formatMatrix(orientationInfo.cssToTexture).join('\n')}</pre>
+      </div>
+      <div class="crt-postfx__matrix">
+        <h3>Texture → CSS</h3>
+        <pre>{formatMatrix(orientationInfo.textureToCss).join('\n')}</pre>
+      </div>
+    </div>
+  </div>
+  <div class="crt-postfx__debug-grid" aria-hidden="true">
+    {#each [1, 2, 3, 4, 5, 6, 7, 8, 9] as cell}
+      <span class="crt-postfx__debug-cell">{cell}</span>
+    {/each}
+  </div>
 </div>
 
 <style>
@@ -777,5 +955,108 @@
       top: 0.75rem;
       right: 0.75rem;
     }
+  }
+
+  .crt-postfx__orientation-panel {
+    position: fixed;
+    left: 1rem;
+    bottom: 1rem;
+    width: min(320px, 90vw);
+    padding: 0.75rem 0.85rem;
+    border-radius: 0.75rem;
+    background: rgba(10, 24, 18, 0.82);
+    color: rgba(214, 255, 235, 0.92);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.05em;
+    line-height: 1.35;
+    pointer-events: none;
+    box-shadow: 0 0 0 1px rgba(12, 48, 34, 0.45);
+    backdrop-filter: blur(10px);
+  }
+
+  .crt-postfx__orientation-panel h2 {
+    margin: 0 0 0.5rem;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: rgba(166, 255, 208, 0.9);
+  }
+
+  .crt-postfx__orientation-panel dl {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.35rem 0.5rem;
+    margin: 0 0 0.65rem;
+  }
+
+  .crt-postfx__orientation-panel dt {
+    font-weight: 600;
+    text-transform: uppercase;
+    color: rgba(137, 235, 193, 0.9);
+  }
+
+  .crt-postfx__orientation-panel dd {
+    margin: 0;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: rgba(214, 255, 235, 0.88);
+  }
+
+  .crt-postfx__matrix-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.65rem;
+  }
+
+  .crt-postfx__matrix h3 {
+    margin: 0 0 0.25rem;
+    font-size: 0.58rem;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: rgba(154, 255, 210, 0.86);
+  }
+
+  .crt-postfx__matrix pre {
+    margin: 0;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.55rem;
+    line-height: 1.4;
+    color: rgba(214, 255, 235, 0.9);
+  }
+
+  .crt-postfx__debug-grid {
+    position: fixed;
+    top: 1rem;
+    left: 1rem;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 2px;
+    width: 96px;
+    height: 96px;
+    padding: 4px;
+    border-radius: 0.5rem;
+    background-image:
+      linear-gradient(45deg, rgba(120, 220, 180, 0.22) 25%, transparent 25%),
+      linear-gradient(-45deg, rgba(120, 220, 180, 0.22) 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, rgba(120, 220, 180, 0.22) 75%),
+      linear-gradient(-45deg, transparent 75%, rgba(120, 220, 180, 0.22) 75%);
+    background-size: 24px 24px;
+    background-position: 0 0, 0 12px, 12px -12px, -12px 0;
+    color: rgba(18, 48, 36, 0.92);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.7rem;
+    font-weight: 600;
+    pointer-events: none;
+    box-shadow: 0 0 0 1px rgba(12, 48, 34, 0.45), 0 8px 18px rgba(0, 0, 0, 0.28);
+  }
+
+  .crt-postfx__debug-cell {
+    display: grid;
+    place-items: center;
+    background: rgba(214, 255, 235, 0.82);
+    border-radius: 0.35rem;
+    color: rgba(6, 24, 16, 0.92);
+    text-shadow: none;
   }
 </style>

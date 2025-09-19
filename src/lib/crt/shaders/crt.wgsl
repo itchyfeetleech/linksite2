@@ -26,15 +26,12 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
     vec2<f32>(3.0, -1.0)
   );
 
-  var uvs = array<vec2<f32>, 3>(
-    vec2<f32>(0.0, 0.0),
-    vec2<f32>(0.0, 2.0),
-    vec2<f32>(2.0, 0.0)
-  );
-
   var output: VertexOutput;
-  output.position = vec4<f32>(positions[vertexIndex], 0.0, 1.0);
-  output.uv = uvs[vertexIndex];
+  let position = positions[vertexIndex];
+  output.position = vec4<f32>(position, 0.0, 1.0);
+  var uv = position * 0.5 + vec2<f32>(0.5, 0.5);
+  uv.y = 1.0 - uv.y;
+  output.uv = uv;
   return output;
 }
 

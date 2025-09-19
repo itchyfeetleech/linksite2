@@ -15,6 +15,8 @@ export interface LutResult {
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
+const clamp01 = (value: number) => clamp(value, 0, 1);
+
 const solveRadius = (distorted: number, k1: number, k2: number) => {
   if (distorted === 0) {
     return 0;
@@ -115,25 +117,27 @@ export const generateLuts = (params: GeometryParams): LutResult => {
   return { forward, inverse, width, height };
 };
 
-export const bilinearSample = (
+export const sampleLut = (
   data: Float32Array,
   width: number,
   height: number,
-  x: number,
-  y: number
+  u: number,
+  v: number
 ) => {
   if (width <= 0 || height <= 0) {
-    return { x, y };
+    return { x: u, y: v };
   }
 
-  const clampedX = clamp(x, 0, width - 1);
-  const clampedY = clamp(y, 0, height - 1);
-  const x0 = Math.floor(clampedX);
+  const maxX = Math.max(0, width - 1);
+  const maxY = Math.max(0, height - 1);
+  const scaledX = clamp01(u) * maxX;
+  const scaledY = clamp01(v) * maxY;
+  const x0 = Math.floor(scaledX);
   const x1 = Math.min(width - 1, x0 + 1);
-  const y0 = Math.floor(clampedY);
+  const y0 = Math.floor(scaledY);
   const y1 = Math.min(height - 1, y0 + 1);
-  const tx = clampedX - x0;
-  const ty = clampedY - y0;
+  const tx = scaledX - x0;
+  const ty = scaledY - y0;
 
   const sample = (sx: number, sy: number) => {
     const idx = (sy * width + sx) * 2;

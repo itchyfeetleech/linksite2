@@ -43,7 +43,9 @@ export const createLutController = (): LutController => {
       });
     });
     worker.addEventListener('error', (error) => {
-      pending.forEach((entry) => entry.reject(error instanceof Error ? error : new Error('LUT worker error')));
+      pending.forEach((entry) => {
+        entry.reject(error instanceof Error ? error : new Error('LUT worker error'));
+      });
       pending.clear();
     });
   };
@@ -66,7 +68,9 @@ export const createLutController = (): LutController => {
       worker.terminate();
       worker = null;
     }
-    pending.forEach((entry) => entry.reject(new Error('LUT controller disposed')));
+    pending.forEach((entry) => {
+      entry.reject(new Error('LUT controller disposed'));
+    });
     pending.clear();
   };
 

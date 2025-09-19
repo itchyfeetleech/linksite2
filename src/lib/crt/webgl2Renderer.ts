@@ -131,7 +131,10 @@ export class WebGl2Renderer implements CRTGpuRenderer {
     }
 
     const source = frame.bitmap as unknown as TextureSource;
+    const gl = this.app.gl;
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
     this.sceneTexture.data(source);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
     frame.bitmap.close();
   }
 

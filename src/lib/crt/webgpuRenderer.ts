@@ -54,6 +54,7 @@ export class WebGpuRenderer implements CRTGpuRenderer {
       device: this.device,
       format: this.format,
       alphaMode: 'premultiplied',
+      colorSpace: 'srgb',
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_DST
     });
 
