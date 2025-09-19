@@ -1,11 +1,11 @@
 struct Uniforms {
-  resolution: vec4<f32>;
-  timing: vec4<f32>;
-  effects: vec4<f32>;
-  bloomParams: vec4<f32>;
-  cssMetrics: vec4<f32>;
-  cursorState: vec4<f32>;
-  cursorMeta: vec4<f32>;
+  resolution: vec4<f32>,
+  timing: vec4<f32>,
+  effects: vec4<f32>,
+  bloomParams: vec4<f32>,
+  cssMetrics: vec4<f32>,
+  cursorState: vec4<f32>,
+  cursorMeta: vec4<f32>,
 };
 
 @group(0) @binding(0) var linearSampler: sampler;
@@ -44,6 +44,44 @@ fn clampCss(value: vec2<f32>, size: vec2<f32>) -> vec2<f32> {
     clamp(value.x, 0.0, size.x),
     clamp(value.y, 0.0, size.y)
   );
+}
+
+fn clampTexelCoord(coord: vec2<i32>, maxCoord: vec2<i32>) -> vec2<i32> {
+  let zero = vec2<i32>(0, 0);
+  return min(max(coord, zero), maxCoord);
+}
+
+fn sampleForwardLut(uv: vec2<f32>, allowLinear: f32) -> vec2<f32> {
+  let clampedUv = clampUv(uv);
+  if (allowLinear > 0.5) {
+    return textureSampleLevel(forwardLut, linearSampler, clampedUv, 0.0).xy;
+  }
+
+  let dims = textureDimensions(forwardLut);
+  if (dims.x == 0u || dims.y == 0u) {
+    return clampedUv * uniforms.cssMetrics.xy;
+  }
+
+  let dimsF = vec2<f32>(f32(dims.x), f32(dims.y));
+  let texel = clampedUv * dimsF - vec2<f32>(0.5, 0.5);
+  let base = floor(texel);
+  let frac = texel - base;
+  let baseCoord = vec2<i32>(base);
+  let maxCoord = vec2<i32>(i32(dims.x) - 1, i32(dims.y) - 1);
+
+  let c00 = clampTexelCoord(baseCoord, maxCoord);
+  let c10 = clampTexelCoord(baseCoord + vec2<i32>(1, 0), maxCoord);
+  let c01 = clampTexelCoord(baseCoord + vec2<i32>(0, 1), maxCoord);
+  let c11 = clampTexelCoord(baseCoord + vec2<i32>(1, 1), maxCoord);
+
+  let s00 = textureLoad(forwardLut, c00, 0).xy;
+  let s10 = textureLoad(forwardLut, c10, 0).xy;
+  let s01 = textureLoad(forwardLut, c01, 0).xy;
+  let s11 = textureLoad(forwardLut, c11, 0).xy;
+
+  let ix0 = mix(s00, s10, frac.x);
+  let ix1 = mix(s01, s11, frac.x);
+  return mix(ix0, ix1, frac.y);
 }
 
 fn cssToSceneUv(css: vec2<f32>, dpr: f32, invResolution: vec2<f32>) -> vec2<f32> {
@@ -88,7 +126,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
   let bloomIntensity = baseBloomIntensity * cursorMeta.y;
 
-  let cssCoordRaw = textureSampleLevel(forwardLut, linearSampler, uv, 0.0).xy;
+  let cssCoordRaw = sampleForwardLut(uv, uniforms.cursorMeta.z);
   let cssCoord = clampCss(cssCoordRaw, cssSize);
   let sceneUv = clampUv(cssToSceneUv(cssCoord, devicePixelRatio, invResolution));
   var color = textureSampleLevel(sceneTexture, linearSampler, sceneUv, 0.0).rgb;

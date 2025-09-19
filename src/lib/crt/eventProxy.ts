@@ -1,5 +1,6 @@
 import { sampleLut, type LutResult } from './geometryMath';
 import { applyMat3, type CoordSpaceSnapshot } from './coordSpace';
+import { logger } from '../logger';
 
 interface LutSample {
   width: number;
@@ -69,28 +70,31 @@ export const createEventProxy = ({
   const pointerTargets = new Map<number, EventTarget>();
   const pointerPositions = new Map<number, { x: number; y: number }>();
   const pointerButtons = new Map<number, number>();
+  const forwardingPointers = new Set<number>();
+  const SYNTHETIC_EVENT = Symbol('crtProxySynthetic');
 
   let pointerEventsDisabled = false;
-  let restoreHandle = 0;
 
-  const disableForHitTest = () => {
+  const withHitTest = async <T>(callback: () => T): Promise<T> => {
     if (pointerEventsDisabled) {
-      return;
+      return callback();
     }
     pointerEventsDisabled = true;
+    const previous = canvas.style.pointerEvents;
     canvas.style.pointerEvents = 'none';
-    restoreHandle = window.requestAnimationFrame(() => {
-      canvas.style.pointerEvents = '';
+    await Promise.resolve();
+    try {
+      return callback();
+    } finally {
+      canvas.style.pointerEvents = previous;
       pointerEventsDisabled = false;
-      restoreHandle = 0;
-    });
+    }
   };
 
-  const cancelRestore = () => {
-    if (restoreHandle) {
-      window.cancelAnimationFrame(restoreHandle);
-      restoreHandle = 0;
-    }
+  const runSafely = (task: () => Promise<void>) => {
+    void task().catch((error) => {
+      logger.warn('CRT event proxy handler error', error);
+    });
   };
 
   const samplePoint = (x: number, y: number) => {
@@ -132,14 +136,12 @@ export const createEventProxy = ({
     onActivity?.(state);
   };
 
-  const getTarget = (pointerId: number, coordinates: { x: number; y: number }) => {
+  const getTarget = async (pointerId: number, coordinates: { x: number; y: number }) => {
     const captured = pointerTargets.get(pointerId);
     if (captured) {
       return captured;
     }
-    disableForHitTest();
-    const target = document.elementFromPoint(coordinates.x, coordinates.y) ?? document.body;
-    return target;
+    return withHitTest(() => document.elementFromPoint(coordinates.x, coordinates.y) ?? document.body);
   };
 
   const buildPointerInit = (
@@ -176,7 +178,7 @@ export const createEventProxy = ({
     metaKey: event.metaKey
   });
 
-  const dispatchPointer = (
+  const dispatchPointer = async (
     type: string,
     source: PointerEvent,
     coords: { x: number; y: number },
@@ -187,47 +189,75 @@ export const createEventProxy = ({
     pointerPositions.set(source.pointerId, coords);
 
     const target = preserveTarget
-      ? pointerTargets.get(source.pointerId) ?? getTarget(source.pointerId, coords)
-      : getTarget(source.pointerId, coords);
+      ? pointerTargets.get(source.pointerId) ?? (await getTarget(source.pointerId, coords))
+      : await getTarget(source.pointerId, coords);
 
     const init = buildPointerInit(source, coords, movement);
     const synthetic = new PointerEvent(type, init);
-    const dispatched = target.dispatchEvent(synthetic);
-    if (!dispatched && source.cancelable) {
-      source.preventDefault();
+    Reflect.set(synthetic, SYNTHETIC_EVENT, true);
+
+    const pointerId = source.pointerId;
+    if (pointerId >= 0) {
+      forwardingPointers.add(pointerId);
+    }
+    try {
+      const dispatched = target.dispatchEvent(synthetic);
+      if (!dispatched && source.cancelable) {
+        source.preventDefault();
+      }
+    } finally {
+      if (pointerId >= 0) {
+        forwardingPointers.delete(pointerId);
+      }
     }
     return target;
   };
 
   const handlePointerDown = (event: PointerEvent) => {
-    const start = performance.now();
-    const sample = samplePoint(event.clientX, event.clientY);
-    const coords = { x: sample.domX, y: sample.domY };
-    const target = dispatchPointer('pointerdown', event, coords);
-    pointerTargets.set(event.pointerId, target);
-    pointerButtons.set(event.pointerId, event.buttons);
-    updateActivity({ pointerDown: true, pointerType: event.pointerType });
-    focusElement(target);
-    updateCursor({
-      screenX: event.clientX,
-      screenY: event.clientY,
-      domX: sample.domX,
-      domY: sample.domY,
-      uvX: sample.uvX,
-      uvY: sample.uvY,
-      pointerType: event.pointerType,
-      buttons: event.buttons,
-      visible: true
+    if (!event.isTrusted || forwardingPointers.has(event.pointerId)) {
+      return;
+    }
+
+    event.stopImmediatePropagation();
+    event.stopPropagation();
+
+    runSafely(async () => {
+      const start = performance.now();
+      const sample = samplePoint(event.clientX, event.clientY);
+      const coords = { x: sample.domX, y: sample.domY };
+      const target = await dispatchPointer('pointerdown', event, coords);
+      pointerTargets.set(event.pointerId, target);
+      pointerButtons.set(event.pointerId, event.buttons);
+      updateActivity({ pointerDown: true, pointerType: event.pointerType });
+      focusElement(target);
+      updateCursor({
+        screenX: event.clientX,
+        screenY: event.clientY,
+        domX: sample.domX,
+        domY: sample.domY,
+        uvX: sample.uvX,
+        uvY: sample.uvY,
+        pointerType: event.pointerType,
+        buttons: event.buttons,
+        visible: true
+      });
+      logLatency?.(performance.now() - start);
     });
-    logLatency?.(performance.now() - start);
   };
 
   const handlePointerMove = (event: PointerEvent) => {
-    const process = (source: PointerEvent) => {
+    if (!event.isTrusted || forwardingPointers.has(event.pointerId)) {
+      return;
+    }
+
+    event.stopImmediatePropagation();
+    event.stopPropagation();
+
+    const processEvent = async (source: PointerEvent) => {
       const start = performance.now();
       const sample = samplePoint(source.clientX, source.clientY);
       const coords = { x: sample.domX, y: sample.domY };
-      const target = dispatchPointer('pointermove', source, coords, true);
+      const target = await dispatchPointer('pointermove', source, coords, true);
       pointerButtons.set(source.pointerId, source.buttons);
       updateCursor({
         screenX: source.clientX,
@@ -246,19 +276,21 @@ export const createEventProxy = ({
 
     const coalesced = event.getCoalescedEvents?.();
     if (coalesced && coalesced.length > 0) {
-      coalesced.forEach((coalescedEvent) => {
-        process(coalescedEvent as PointerEvent);
+      runSafely(async () => {
+        for (const item of coalesced) {
+          await processEvent(item as PointerEvent);
+        }
       });
     } else {
-      process(event);
+      runSafely(() => processEvent(event));
     }
   };
 
-  const finishPointer = (event: PointerEvent, type: 'pointerup' | 'pointercancel') => {
+  const finishPointer = async (event: PointerEvent, type: 'pointerup' | 'pointercancel') => {
     const start = performance.now();
     const sample = samplePoint(event.clientX, event.clientY);
     const coords = { x: sample.domX, y: sample.domY };
-    dispatchPointer(type, event, coords, true);
+    await dispatchPointer(type, event, coords, true);
     pointerTargets.delete(event.pointerId);
     pointerPositions.delete(event.pointerId);
     pointerButtons.delete(event.pointerId);
@@ -278,14 +310,27 @@ export const createEventProxy = ({
   };
 
   const handlePointerUp = (event: PointerEvent) => {
-    finishPointer(event, 'pointerup');
+    if (!event.isTrusted || forwardingPointers.has(event.pointerId)) {
+      return;
+    }
+    event.stopImmediatePropagation();
+    event.stopPropagation();
+    runSafely(() => finishPointer(event, 'pointerup'));
   };
 
   const handlePointerCancel = (event: PointerEvent) => {
-    finishPointer(event, 'pointercancel');
+    if (!event.isTrusted || forwardingPointers.has(event.pointerId)) {
+      return;
+    }
+    event.stopImmediatePropagation();
+    event.stopPropagation();
+    runSafely(() => finishPointer(event, 'pointercancel'));
   };
 
   const handlePointerEnter = (event: PointerEvent) => {
+    if (!event.isTrusted) {
+      return;
+    }
     const sample = samplePoint(event.clientX, event.clientY);
     updateCursor({
       screenX: event.clientX,
@@ -301,6 +346,9 @@ export const createEventProxy = ({
   };
 
   const handlePointerLeave = (event: PointerEvent) => {
+    if (!event.isTrusted) {
+      return;
+    }
     pointerTargets.delete(event.pointerId);
     pointerPositions.delete(event.pointerId);
     pointerButtons.delete(event.pointerId);
@@ -319,62 +367,80 @@ export const createEventProxy = ({
   };
 
   const handleWheel = (event: WheelEvent) => {
-    const start = performance.now();
-    const sample = samplePoint(event.clientX, event.clientY);
-    const coords = { x: sample.domX, y: sample.domY };
-    const target = getTarget(-1, coords);
-    const synthetic = new WheelEvent(event.type, {
-      bubbles: true,
-      cancelable: event.cancelable,
-      composed: event.composed,
-      deltaMode: event.deltaMode,
-      deltaX: event.deltaX,
-      deltaY: event.deltaY,
-      deltaZ: event.deltaZ,
-      clientX: coords.x,
-      clientY: coords.y,
-      screenX: event.screenX + (coords.x - event.clientX),
-      screenY: event.screenY + (coords.y - event.clientY),
-      ctrlKey: event.ctrlKey,
-      shiftKey: event.shiftKey,
-      altKey: event.altKey,
-      metaKey: event.metaKey
-    });
-    const dispatched = target.dispatchEvent(synthetic);
-    if (!dispatched && event.cancelable) {
-      event.preventDefault();
+    if (!event.isTrusted) {
+      return;
     }
-    logLatency?.(performance.now() - start);
+    event.stopImmediatePropagation();
+    event.stopPropagation();
+
+    runSafely(async () => {
+      const start = performance.now();
+      const sample = samplePoint(event.clientX, event.clientY);
+      const coords = { x: sample.domX, y: sample.domY };
+      const target = await getTarget(-1, coords);
+      const synthetic = new WheelEvent(event.type, {
+        bubbles: true,
+        cancelable: event.cancelable,
+        composed: event.composed,
+        deltaMode: event.deltaMode,
+        deltaX: event.deltaX,
+        deltaY: event.deltaY,
+        deltaZ: event.deltaZ,
+        clientX: coords.x,
+        clientY: coords.y,
+        screenX: event.screenX + (coords.x - event.clientX),
+        screenY: event.screenY + (coords.y - event.clientY),
+        ctrlKey: event.ctrlKey,
+        shiftKey: event.shiftKey,
+        altKey: event.altKey,
+        metaKey: event.metaKey
+      });
+      Reflect.set(synthetic, SYNTHETIC_EVENT, true);
+      const dispatched = target.dispatchEvent(synthetic);
+      if (!dispatched && event.cancelable) {
+        event.preventDefault();
+      }
+      logLatency?.(performance.now() - start);
+    });
   };
 
   const handleMouseLike = (event: MouseEvent) => {
-    const start = performance.now();
-    const sample = samplePoint(event.clientX, event.clientY);
-    const coords = { x: sample.domX, y: sample.domY };
-    const target = getTarget(-1, coords);
-    const synthetic = new MouseEvent(event.type, {
-      bubbles: true,
-      cancelable: event.cancelable,
-      composed: event.composed,
-      clientX: coords.x,
-      clientY: coords.y,
-      screenX: event.screenX + (coords.x - event.clientX),
-      screenY: event.screenY + (coords.y - event.clientY),
-      button: event.button,
-      buttons: event.buttons,
-      ctrlKey: event.ctrlKey,
-      shiftKey: event.shiftKey,
-      altKey: event.altKey,
-      metaKey: event.metaKey
+    if (!event.isTrusted) {
+      return;
+    }
+    event.stopImmediatePropagation();
+    event.stopPropagation();
+
+    runSafely(async () => {
+      const start = performance.now();
+      const sample = samplePoint(event.clientX, event.clientY);
+      const coords = { x: sample.domX, y: sample.domY };
+      const target = await getTarget(-1, coords);
+      const synthetic = new MouseEvent(event.type, {
+        bubbles: true,
+        cancelable: event.cancelable,
+        composed: event.composed,
+        clientX: coords.x,
+        clientY: coords.y,
+        screenX: event.screenX + (coords.x - event.clientX),
+        screenY: event.screenY + (coords.y - event.clientY),
+        button: event.button,
+        buttons: event.buttons,
+        ctrlKey: event.ctrlKey,
+        shiftKey: event.shiftKey,
+        altKey: event.altKey,
+        metaKey: event.metaKey
+      });
+      Reflect.set(synthetic, SYNTHETIC_EVENT, true);
+      const dispatched = target.dispatchEvent(synthetic);
+      if (!dispatched && event.cancelable) {
+        event.preventDefault();
+      }
+      if (event.type === 'dblclick' || event.type === 'click') {
+        focusElement(target);
+      }
+      logLatency?.(performance.now() - start);
     });
-    const dispatched = target.dispatchEvent(synthetic);
-    if (!dispatched && event.cancelable) {
-      event.preventDefault();
-    }
-    if (event.type === 'dblclick' || event.type === 'click') {
-      focusElement(target);
-    }
-    logLatency?.(performance.now() - start);
   };
 
   const handleContextMenu = (event: MouseEvent) => {
@@ -397,7 +463,6 @@ export const createEventProxy = ({
       return;
     }
     disposed = true;
-    cancelRestore();
     canvas.removeEventListener('pointerdown', handlePointerDown);
     canvas.removeEventListener('pointermove', handlePointerMove);
     canvas.removeEventListener('pointerup', handlePointerUp);
@@ -408,9 +473,12 @@ export const createEventProxy = ({
     canvas.removeEventListener('click', handleMouseLike, true);
     canvas.removeEventListener('dblclick', handleMouseLike, true);
     canvas.removeEventListener('contextmenu', handleContextMenu, true);
+    canvas.style.pointerEvents = '';
+    pointerEventsDisabled = false;
     pointerTargets.clear();
     pointerPositions.clear();
     pointerButtons.clear();
+    forwardingPointers.clear();
   };
 
   const updateLut = (result: LutResult | null) => {
