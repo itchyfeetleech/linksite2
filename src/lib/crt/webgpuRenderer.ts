@@ -3,6 +3,18 @@ import type { CaptureFrame, CRTGpuRenderer } from './types';
 import { UNIFORM_FLOAT_COUNT } from './types';
 import { logger } from '../logger';
 
+class ShaderCompilationError extends Error {
+  readonly label: string;
+  readonly line: number;
+
+  constructor(label: string, line: number, message: string) {
+    super(`${label} line ${line}: ${message}`);
+    this.name = 'ShaderCompilationError';
+    this.label = label;
+    this.line = line;
+  }
+}
+
 interface TextureSize {
   width: number;
   height: number;
@@ -87,7 +99,16 @@ export class WebGpuRenderer implements CRTGpuRenderer {
       {
         module: device.createShaderModule({
           label: 'crt-selftest-compute',
-          code: `@compute @workgroup_size(1, 1, 1) fn cs_self_test() {}`
+          code: `fn cs_select_guard(flag: bool) -> f32 {
+        return select(0.0, 1.0, flag);
+      }
+
+      @compute @workgroup_size(1, 1, 1) fn cs_self_test() {
+        let value = cs_select_guard(true);
+        if (value > 2.0) {
+          return;
+        }
+      }`
         }),
         label: 'crt-selftest-compute'
       }
@@ -124,22 +145,37 @@ export class WebGpuRenderer implements CRTGpuRenderer {
       return;
     }
 
-    errors.forEach((message) => {
-      const lines = source.split('\n');
-      const line = message.lineNum ?? 0;
-      const start = Math.max(0, line - 2);
-      const end = Math.min(lines.length, line + 1);
-      const snippet = lines.slice(start, end).join('\n');
-      logger.error('CRT WebGPU shader compilation error', {
+    const first = errors[0];
+    const lines = source.split('\n');
+    const lineNumber = first.lineNum ?? 0;
+    const start = Math.max(0, lineNumber - 2);
+    const end = Math.min(lines.length, lineNumber + 1);
+    const snippet = lines
+      .slice(start, end)
+      .map((content, index) => {
+        const currentLine = start + index + 1;
+        return `${currentLine.toString().padStart(4, ' ')} | ${content}`;
+      })
+      .join('\n');
+
+    logger.error('CRT WebGPU shader compilation error', {
+      label,
+      line: first.lineNum,
+      column: first.linePos,
+      message: first.message,
+      snippet
+    });
+
+    errors.slice(1).forEach((message) => {
+      logger.error('CRT WebGPU shader compilation error (additional)', {
         label,
         line: message.lineNum,
         column: message.linePos,
-        message: message.message,
-        snippet
+        message: message.message
       });
     });
 
-    throw new Error(`${label} failed to compile`);
+    throw new ShaderCompilationError(label, lineNumber, first.message);
   }
 
   async init(canvas: HTMLCanvasElement) {
@@ -175,19 +211,20 @@ export class WebGpuRenderer implements CRTGpuRenderer {
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_DST
     });
 
+    logger.info('CRT WebGPU creating shader module', { label: 'crt-render-shader' });
     const renderModule = device.createShaderModule({ label: 'crt-render-shader', code: shaderSource });
     await this.validateShaderModule(renderModule, 'crt-render-shader', shaderSource);
 
     this.renderBindGroupLayout = device.createBindGroupLayout({
       label: 'crt-render-bind-group-layout',
       entries: [
-        { binding: 0, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
-        { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
         {
-          binding: 2,
+          binding: 0,
           visibility: GPUShaderStage.FRAGMENT | GPUShaderStage.VERTEX,
           buffer: { type: 'uniform' }
-        }
+        },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } }
       ]
     });
 
@@ -256,9 +293,9 @@ export class WebGpuRenderer implements CRTGpuRenderer {
       label: 'crt-render-bind-group',
       layout: this.renderBindGroupLayout,
       entries: [
-        { binding: 0, resource: this.sampler },
-        { binding: 1, resource: this.sceneTexture.createView({ label: 'crt-scene-view' }) },
-        { binding: 2, resource: { buffer: this.uniformBuffer } }
+        { binding: 0, resource: { buffer: this.uniformBuffer } },
+        { binding: 1, resource: this.sampler },
+        { binding: 2, resource: this.sceneTexture.createView({ label: 'crt-scene-view' }) }
       ]
     });
   }

@@ -19,7 +19,7 @@
   } from '../lib/crt/eventProxy';
   import type { CRTGpuRenderer, CRTRenderMode } from '../lib/crt/types';
   import { mapDomToScreen } from '../lib/crt/geometryMath';
-  import { UNIFORM_FLOAT_COUNT } from '../lib/crt/types';
+  import { UNIFORM_FLOAT_COUNT, UNIFORM_OFFSETS } from '../lib/crt/types';
   import { createCoordSpace } from '../lib/crt/coordSpace';
 
   const BADGE_LABELS: Record<CRTRenderMode, string> = {
@@ -28,13 +28,26 @@
     css: 'CSS'
   };
 
-  const RESOLUTION_OFFSET = 0;
-  const TIMING_OFFSET = 4;
-  const EFFECTS_OFFSET = 8;
-  const BLOOM_OFFSET = 12;
-  const CSS_OFFSET = 16;
-  const CURSOR_STATE_OFFSET = 20;
-  const CURSOR_META_OFFSET = 24;
+  const {
+    resolution: RESOLUTION_OFFSET,
+    invResolution: INV_RESOLUTION_OFFSET,
+    time: TIME_OFFSET,
+    scanline: SCANLINE_OFFSET,
+    slotMask: SLOT_MASK_OFFSET,
+    vignette: VIGNETTE_OFFSET,
+    baseBloom: BASE_BLOOM_OFFSET,
+    aberration: ABERRATION_OFFSET,
+    noise: NOISE_OFFSET,
+    devicePixelRatio: DPR_OFFSET,
+    bloomThreshold: BLOOM_THRESHOLD_OFFSET,
+    bloomSoftness: BLOOM_SOFTNESS_OFFSET,
+    k1: K1_OFFSET,
+    k2: K2_OFFSET,
+    cssSize: CSS_SIZE_OFFSET,
+    invCssSize: INV_CSS_OFFSET,
+    cursorState: CURSOR_STATE_OFFSET,
+    cursorMeta: CURSOR_META_OFFSET
+  } = UNIFORM_OFFSETS;
 
   const POINTER_INDEX: Record<string, number> = {
     mouse: 0,
@@ -183,6 +196,15 @@
 
   updateOrientationInfo();
 
+  const setScalar = (offset: number, value: number) => {
+    uniforms[offset] = value;
+  };
+
+  const setVec2 = (offset: number, a: number, b: number) => {
+    uniforms[offset] = a;
+    uniforms[offset + 1] = b;
+  };
+
   const setVec4 = (offset: number, a: number, b: number, c: number, d: number) => {
     uniforms[offset] = a;
     uniforms[offset + 1] = b;
@@ -238,8 +260,8 @@
     }
     geometryParams.k1 = k1;
     geometryParams.k2 = k2;
-    uniforms[BLOOM_OFFSET + 2] = k1;
-    uniforms[BLOOM_OFFSET + 3] = k2;
+    setScalar(K1_OFFSET, k1);
+    setScalar(K2_OFFSET, k2);
   };
 
   const updateEffectUniforms = () => {
@@ -256,14 +278,14 @@
     const threshold = plain ? 1 : 0.7;
     const softness = plain ? 0.1 : 0.65;
 
-    uniforms[TIMING_OFFSET + 1] = scanlines;
-    uniforms[TIMING_OFFSET + 2] = slotMask;
-    uniforms[TIMING_OFFSET + 3] = vignette;
-    uniforms[EFFECTS_OFFSET + 0] = baseBloom;
-    uniforms[EFFECTS_OFFSET + 1] = aberration;
-    uniforms[EFFECTS_OFFSET + 2] = noise;
-    uniforms[BLOOM_OFFSET + 0] = threshold;
-    uniforms[BLOOM_OFFSET + 1] = softness;
+    setScalar(SCANLINE_OFFSET, scanlines);
+    setScalar(SLOT_MASK_OFFSET, slotMask);
+    setScalar(VIGNETTE_OFFSET, vignette);
+    setScalar(BASE_BLOOM_OFFSET, baseBloom);
+    setScalar(ABERRATION_OFFSET, aberration);
+    setScalar(NOISE_OFFSET, noise);
+    setScalar(BLOOM_THRESHOLD_OFFSET, threshold);
+    setScalar(BLOOM_SOFTNESS_OFFSET, softness);
 
     applyBarrelCoefficients();
     void renderer?.updateGeometry(geometryParams);
@@ -292,15 +314,11 @@
     cssWidth = coordSnapshot.cssWidth;
     cssHeight = coordSnapshot.cssHeight;
 
-    setVec4(
-      RESOLUTION_OFFSET,
-      coordSnapshot.textureWidth,
-      coordSnapshot.textureHeight,
-      1 / coordSnapshot.textureWidth,
-      1 / coordSnapshot.textureHeight
-    );
-    uniforms[EFFECTS_OFFSET + 3] = dpr;
-    setVec4(CSS_OFFSET, cssWidth, cssHeight, 1 / cssWidth, 1 / cssHeight);
+    setVec2(RESOLUTION_OFFSET, coordSnapshot.textureWidth, coordSnapshot.textureHeight);
+    setVec2(INV_RESOLUTION_OFFSET, 1 / coordSnapshot.textureWidth, 1 / coordSnapshot.textureHeight);
+    setScalar(DPR_OFFSET, dpr);
+    setVec2(CSS_SIZE_OFFSET, cssWidth, cssHeight);
+    setVec2(INV_CSS_OFFSET, 1 / cssWidth, 1 / cssHeight);
 
     geometryParams.width = cssWidth;
     geometryParams.height = cssHeight;
@@ -378,7 +396,7 @@
     }
 
     lastFrame = now;
-    uniforms[TIMING_OFFSET + 0] = now * 0.001;
+    setScalar(TIME_OFFSET, now * 0.001);
     renderer?.render(uniforms);
     logFrameTime(delta);
 
@@ -483,15 +501,11 @@
       cssWidth = coordSnapshot.cssWidth;
       cssHeight = coordSnapshot.cssHeight;
 
-      setVec4(
-        RESOLUTION_OFFSET,
-        coordSnapshot.textureWidth,
-        coordSnapshot.textureHeight,
-        1 / coordSnapshot.textureWidth,
-        1 / coordSnapshot.textureHeight
-      );
-      uniforms[EFFECTS_OFFSET + 3] = dpr;
-      setVec4(CSS_OFFSET, cssWidth, cssHeight, 1 / cssWidth, 1 / cssHeight);
+      setVec2(RESOLUTION_OFFSET, coordSnapshot.textureWidth, coordSnapshot.textureHeight);
+      setVec2(INV_RESOLUTION_OFFSET, 1 / coordSnapshot.textureWidth, 1 / coordSnapshot.textureHeight);
+      setScalar(DPR_OFFSET, dpr);
+      setVec2(CSS_SIZE_OFFSET, cssWidth, cssHeight);
+      setVec2(INV_CSS_OFFSET, 1 / cssWidth, 1 / cssHeight);
 
       geometryParams.width = cssWidth;
       geometryParams.height = cssHeight;
@@ -748,11 +762,22 @@
   };
 
   onMount(() => {
-    setVec4(RESOLUTION_OFFSET, 1, 1, 1, 1);
-    setVec4(TIMING_OFFSET, 0, 0, 0, 0);
-    setVec4(EFFECTS_OFFSET, 0, 0, 0, 1);
-    setVec4(BLOOM_OFFSET, 0.7, 0.6, 0, 0);
-    setVec4(CSS_OFFSET, 1, 1, 1, 1);
+    setVec2(RESOLUTION_OFFSET, 1, 1);
+    setVec2(INV_RESOLUTION_OFFSET, 1, 1);
+    setScalar(TIME_OFFSET, 0);
+    setScalar(SCANLINE_OFFSET, 0);
+    setScalar(SLOT_MASK_OFFSET, 0);
+    setScalar(VIGNETTE_OFFSET, 0);
+    setScalar(BASE_BLOOM_OFFSET, 0);
+    setScalar(ABERRATION_OFFSET, 0);
+    setScalar(NOISE_OFFSET, 0);
+    setScalar(DPR_OFFSET, 1);
+    setScalar(BLOOM_THRESHOLD_OFFSET, 0.7);
+    setScalar(BLOOM_SOFTNESS_OFFSET, 0.6);
+    setScalar(K1_OFFSET, 0);
+    setScalar(K2_OFFSET, 0);
+    setVec2(CSS_SIZE_OFFSET, 1, 1);
+    setVec2(INV_CSS_OFFSET, 1, 1);
     setVec4(CURSOR_STATE_OFFSET, 0, 0, 0, 0);
     setVec4(CURSOR_META_OFFSET, 0, 1, 0, 0);
 

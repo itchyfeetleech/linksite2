@@ -1,6 +1,28 @@
 import vertSource from './shaders/crt.vert.glsl?raw';
 import fragSource from './shaders/crt.frag.glsl?raw';
 import type { CaptureFrame, CRTGpuRenderer } from './types';
+import { UNIFORM_OFFSETS } from './types';
+
+const {
+  resolution: RESOLUTION_OFFSET,
+  invResolution: INV_RESOLUTION_OFFSET,
+  time: TIME_OFFSET,
+  scanline: SCANLINE_OFFSET,
+  slotMask: SLOT_MASK_OFFSET,
+  vignette: VIGNETTE_OFFSET,
+  baseBloom: BASE_BLOOM_OFFSET,
+  aberration: ABERRATION_OFFSET,
+  noise: NOISE_OFFSET,
+  devicePixelRatio: DPR_OFFSET,
+  bloomThreshold: BLOOM_THRESHOLD_OFFSET,
+  bloomSoftness: BLOOM_SOFTNESS_OFFSET,
+  k1: K1_OFFSET,
+  k2: K2_OFFSET,
+  cssSize: CSS_SIZE_OFFSET,
+  invCssSize: INV_CSS_OFFSET,
+  cursorState: CURSOR_STATE_OFFSET,
+  cursorMeta: CURSOR_META_OFFSET,
+} = UNIFORM_OFFSETS;
 
 interface TextureSize {
   width: number;
@@ -62,11 +84,22 @@ export class WebGl2Renderer implements CRTGpuRenderer {
       .createDrawCall(program, vertexArray)
       .primitive(this.app.TRIANGLES)
       .texture('uScene', this.sceneTexture)
-      .uniform('uResolution', [1, 1, 1, 1])
-      .uniform('uTiming', [0, 0, 0, 0])
-      .uniform('uEffects', [0, 0, 0, 1])
-      .uniform('uBloomParams', [0.7, 0.6, 0, 0])
-      .uniform('uCssMetrics', [1, 1, 1, 1])
+      .uniform('uResolution', [1, 1])
+      .uniform('uInvResolution', [1, 1])
+      .uniform('uTime', 0)
+      .uniform('uScanlineIntensity', 0)
+      .uniform('uSlotMaskIntensity', 0)
+      .uniform('uVignetteStrength', 0)
+      .uniform('uBaseBloomIntensity', 0)
+      .uniform('uAberrationStrength', 0)
+      .uniform('uNoiseIntensity', 0)
+      .uniform('uDevicePixelRatio', 1)
+      .uniform('uBloomThreshold', 0.7)
+      .uniform('uBloomSoftness', 0.6)
+      .uniform('uK1', 0)
+      .uniform('uK2', 0)
+      .uniform('uCssSize', [1, 1])
+      .uniform('uInvCssSize', [1, 1])
       .uniform('uCursorState', [0, 0, 0, 0])
       .uniform('uCursorMeta', [0, 1, 0, 0]);
   }
@@ -122,18 +155,29 @@ export class WebGl2Renderer implements CRTGpuRenderer {
       return;
     }
 
-    const width = Math.max(1, Math.floor(uniforms[0]));
-    const height = Math.max(1, Math.floor(uniforms[1]));
+    const width = Math.max(1, Math.floor(uniforms[RESOLUTION_OFFSET]));
+    const height = Math.max(1, Math.floor(uniforms[RESOLUTION_OFFSET + 1]));
 
     this.app.viewport(0, 0, width, height);
     this.drawCall
-      .uniform('uResolution', uniforms.subarray(0, 4))
-      .uniform('uTiming', uniforms.subarray(4, 8))
-      .uniform('uEffects', uniforms.subarray(8, 12))
-      .uniform('uBloomParams', uniforms.subarray(12, 16))
-      .uniform('uCssMetrics', uniforms.subarray(16, 20))
-      .uniform('uCursorState', uniforms.subarray(20, 24))
-      .uniform('uCursorMeta', uniforms.subarray(24, 28));
+      .uniform('uResolution', uniforms.subarray(RESOLUTION_OFFSET, RESOLUTION_OFFSET + 2))
+      .uniform('uInvResolution', uniforms.subarray(INV_RESOLUTION_OFFSET, INV_RESOLUTION_OFFSET + 2))
+      .uniform('uTime', uniforms[TIME_OFFSET])
+      .uniform('uScanlineIntensity', uniforms[SCANLINE_OFFSET])
+      .uniform('uSlotMaskIntensity', uniforms[SLOT_MASK_OFFSET])
+      .uniform('uVignetteStrength', uniforms[VIGNETTE_OFFSET])
+      .uniform('uBaseBloomIntensity', uniforms[BASE_BLOOM_OFFSET])
+      .uniform('uAberrationStrength', uniforms[ABERRATION_OFFSET])
+      .uniform('uNoiseIntensity', uniforms[NOISE_OFFSET])
+      .uniform('uDevicePixelRatio', uniforms[DPR_OFFSET])
+      .uniform('uBloomThreshold', uniforms[BLOOM_THRESHOLD_OFFSET])
+      .uniform('uBloomSoftness', uniforms[BLOOM_SOFTNESS_OFFSET])
+      .uniform('uK1', uniforms[K1_OFFSET])
+      .uniform('uK2', uniforms[K2_OFFSET])
+      .uniform('uCssSize', uniforms.subarray(CSS_SIZE_OFFSET, CSS_SIZE_OFFSET + 2))
+      .uniform('uInvCssSize', uniforms.subarray(INV_CSS_OFFSET, INV_CSS_OFFSET + 2))
+      .uniform('uCursorState', uniforms.subarray(CURSOR_STATE_OFFSET, CURSOR_STATE_OFFSET + 4))
+      .uniform('uCursorMeta', uniforms.subarray(CURSOR_META_OFFSET, CURSOR_META_OFFSET + 4));
 
     this.app.clear();
     this.drawCall.draw();
