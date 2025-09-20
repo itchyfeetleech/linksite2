@@ -163,6 +163,20 @@ export const createDomCapture = ({
     dirtyRect = dirtyRect ? unionRects(dirtyRect, clamped) : clamped;
   };
 
+  const shouldIgnoreNode = (node: Node | null): boolean => {
+    if (!node) {
+      return false;
+    }
+    let current: Element | null = node instanceof Element ? node : node.parentElement;
+    while (current) {
+      if (ignorePredicate(current)) {
+        return true;
+      }
+      current = current.parentElement;
+    }
+    return false;
+  };
+
   const schedule = () => {
     if (disposed || paused) {
       return;
@@ -217,6 +231,9 @@ export const createDomCapture = ({
   };
 
   const considerNode = (node: Node, viewport: Rect): boolean => {
+    if (shouldIgnoreNode(node)) {
+      return false;
+    }
     if (node instanceof Element && ignorePredicate(node)) {
       return false;
     }
@@ -236,16 +253,16 @@ export const createDomCapture = ({
     let mutated = false;
 
     for (const mutation of mutations) {
-      if (considerNode(mutation.target, viewport)) {
+      if (!shouldIgnoreNode(mutation.target) && considerNode(mutation.target, viewport)) {
         mutated = true;
       }
       mutation.addedNodes?.forEach((node) => {
-        if (considerNode(node, viewport)) {
+        if (!shouldIgnoreNode(node) && considerNode(node, viewport)) {
           mutated = true;
         }
       });
       mutation.removedNodes?.forEach((node) => {
-        if (considerNode(node, viewport)) {
+        if (!shouldIgnoreNode(node) && considerNode(node, viewport)) {
           mutated = true;
         }
       });
