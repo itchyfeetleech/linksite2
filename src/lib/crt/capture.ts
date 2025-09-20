@@ -276,14 +276,20 @@ export const createDomCapture = ({
     }
   };
 
-  const handleAnimationStart = () => {
+  const handleAnimationStart = (event: Event) => {
+    if (shouldIgnoreNode(event.target as Node | null)) {
+      return;
+    }
     activeAnimations += 1;
     markDirtyFull();
     schedule();
     ensureAnimationLoop();
   };
 
-  const handleAnimationStop = () => {
+  const handleAnimationStop = (event: Event) => {
+    if (shouldIgnoreNode(event.target as Node | null)) {
+      return;
+    }
     activeAnimations = Math.max(0, activeAnimations - 1);
     markDirtyFull();
     schedule();
