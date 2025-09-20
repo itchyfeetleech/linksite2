@@ -271,11 +271,9 @@ export const createDomCapture = ({
       });
     }
 
-    if (!mutated) {
-      markDirtyFull();
+    if (mutated) {
+      schedule();
     }
-
-    schedule();
   };
 
   const handleAnimationStart = () => {
