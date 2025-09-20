@@ -601,9 +601,11 @@
       const gpuSubmitMs = renderTimings.gpuSubmitMs + uploadMs;
       const gpuFrameMs = renderTimings.gpuFrameMs;
       const cpuFrameMs = performance.now() - frameCpuStart;
+      const frameInterval = delta > 0 ? delta : cpuFrameMs;
       const gpuCost = Math.max(gpuFrameMs, gpuSubmitMs);
-      const totalMs = captureMs + Math.max(gpuCost, cpuFrameMs) + proxyMs;
-      const fps = totalMs > 0 ? 1000 / totalMs : 0;
+      const totalMsWork = captureMs + Math.max(gpuCost, cpuFrameMs) + proxyMs;
+      const totalMs = Math.max(totalMsWork, frameInterval);
+      const fps = frameInterval > 0 ? 1000 / frameInterval : 0;
 
       const frameTimings: FrameTimings = {
         captureMs,
@@ -740,6 +742,10 @@
   const handleCapture = async (frame: CaptureFrame, stats: CaptureStats) => {
     logCaptureDuration(stats.duration);
     pendingCaptureMs += stats.duration;
+    if (stats.duration > CAPTURE_SPIKE_LOG_THRESHOLD) {
+      logger.warn('CRT postFX capture spike', { duration: Number(stats.duration.toFixed(2)) });
+    }
+    adjustInternalScaleForCapture(stats.duration);
     if (!renderer) {
       frame.bitmap.close();
       return;
