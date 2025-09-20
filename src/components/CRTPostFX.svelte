@@ -11,6 +11,9 @@
   } from '../lib/crt/capture';
   import { createWebGpuRenderer } from '../lib/crt/webgpuRenderer';
   import { createWebGl2Renderer } from '../lib/crt/webgl2Renderer';
+  import { SceneComposer } from '../lib/crt/sceneComposer';
+  import { createWebGpuSceneRenderer, WebGpuSceneRenderer } from '../lib/crt/webgpuSceneRenderer';
+
   import {
     createEventProxy,
     type CursorState,
@@ -103,6 +106,10 @@
   let effectState: CRTEffectsState | null = null;
   let renderer: CRTGpuRenderer | null = null;
   let domCapture: DomCaptureController | null = null;
+  let sceneComposer: SceneComposer | null = null;
+  let sceneRendererGpu: WebGpuSceneRenderer | null = null;
+  let useScenePipeline = false;
+  let scenePipelineReady = false;
   let eventProxy: EventProxyController | null = null;
   const uniforms = new Float32Array(UNIFORM_FLOAT_COUNT);
 
@@ -341,6 +348,48 @@
     }
   };
 
+  const destroyScenePipeline = () => {
+    sceneRendererGpu?.destroy();
+    sceneRendererGpu = null;
+    sceneComposer = null;
+    scenePipelineReady = false;
+  };
+
+  const refreshSceneBinding = async () => {
+    if (!useScenePipeline || !sceneRendererGpu || !renderer || renderer.mode !== 'webgpu') {
+      return;
+    }
+    sceneRendererGpu.resize(coordSnapshot.textureWidth, coordSnapshot.textureHeight);
+    const target = sceneRendererGpu.getRenderTarget();
+    if (!target) {
+      return;
+    }
+    if (typeof renderer.bindSceneTexture === 'function') {
+      await renderer.bindSceneTexture(target);
+      hasTexture = true;
+      scenePipelineReady = true;
+    } else {
+      scenePipelineReady = false;
+      logger.warn('CRT scene pipeline unavailable: renderer missing bindSceneTexture');
+    }
+  };
+
+  const setupScenePipeline = async () => {
+    if (!useScenePipeline || !renderer || renderer.mode !== 'webgpu') {
+      return;
+    }
+    destroyScenePipeline();
+    sceneComposer = new SceneComposer();
+    sceneRendererGpu = await createWebGpuSceneRenderer('rgba8unorm');
+    await refreshSceneBinding();
+    if (sceneRendererGpu && scenePipelineReady) {
+      try {
+        await sceneRendererGpu.render(null);
+      } catch (error) {
+        logger.warn('CRT scene pipeline initial render failed', error);
+      }
+    }
+  };
   const updateBadge = () => {
     const base = BADGE_LABELS[renderMode] ?? renderMode.toUpperCase();
     badgeLabel = effectState?.plainMode ? `${base} - Plain` : base;
@@ -588,6 +637,16 @@
     lastFrame = now;
     setScalar(TIME_OFFSET, now * 0.001);
 
+    if (useScenePipeline && renderer?.mode === 'webgpu' && sceneRendererGpu) {
+      let sceneUpdate = null;
+      if (sceneComposer) {
+        sceneComposer.beginFrame();
+        sceneUpdate = sceneComposer.endFrame();
+      }
+      sceneRendererGpu
+        .render(sceneUpdate)
+        .catch((error) => logger.warn('CRT scene pipeline render failed', error));
+    }
     if (renderer) {
       const renderTimings: RendererTimings = renderer.render(uniforms);
       const captureMs = pendingCaptureMs;
@@ -818,6 +877,8 @@
   const teardownGpu = () => {
     domCapture?.destroy();
     domCapture = null;
+    destroyScenePipeline();
+    useScenePipeline = false;
     eventProxy?.destroy();
     eventProxy = null;
     stopLoop();
@@ -832,7 +893,6 @@
     updateOrientationInfo();
     logOrientationState('teardown');
   };
-
   const initializeGpu = async (mode: Exclude<CRTRenderMode, 'css'>) => {
     if (!canvas) {
       throw new Error('Canvas unavailable');
@@ -843,6 +903,11 @@
     renderer = mode === 'webgpu' ? await createWebGpuRenderer(canvas) : await createWebGl2Renderer(canvas);
     renderMode = mode;
     hasTexture = false;
+
+    useScenePipeline = scenePipelineFlag && mode === 'webgpu';
+    if (!useScenePipeline) {
+      destroyScenePipeline();
+    }
 
     updateCanvasSize();
     updateEffectUniforms();
@@ -856,30 +921,42 @@
       logLatency: (value) => logProxyLatency(value)
     });
 
-    domCapture = createDomCapture({
-      root: document.documentElement,
-      throttleMs: getIdleThrottle(),
-      ignore: (element) =>
-        element instanceof HTMLElement && element.dataset?.crtPostfxIgnore === 'true',
-      onCapture: handleCapture,
-      getScale: () => (window.devicePixelRatio || 1) * internalScale
-    });
+    let pipelineReady = false;
+    if (useScenePipeline) {
+      domCapture = null;
+      await setupScenePipeline();
+      pipelineReady = scenePipelineReady;
+      if (!pipelineReady) {
+        useScenePipeline = false;
+      }
+    }
 
-    domCapture.updateThrottle(pointerDown ? getDragThrottle() : getIdleThrottle());
-    domCapture.setPaused(typeof document !== 'undefined' ? document.hidden : true);
+    if (!useScenePipeline) {
+      domCapture = createDomCapture({
+        root: document.documentElement,
+        throttleMs: getIdleThrottle(),
+        ignore: (element) =>
+          element instanceof HTMLElement && element.dataset?.crtPostfxIgnore === 'true',
+        onCapture: handleCapture,
+        getScale: () => (window.devicePixelRatio || 1) * internalScale
+      });
+      domCapture.updateThrottle(pointerDown ? getDragThrottle() : getIdleThrottle());
+      domCapture.setPaused(typeof document !== 'undefined' ? document.hidden : true);
+    } else {
+      hasTexture = hasTexture || pipelineReady;
+    }
 
     canvasHidden = true;
     updateRenderState();
     updateOrientationInfo();
     logOrientationState('mode-init');
 
-    if (typeof document !== 'undefined' && !document.hidden) {
+    if (!useScenePipeline && typeof document !== 'undefined' && !document.hidden) {
       domCapture
-        .captureImmediate()
+        ?.captureImmediate()
         .catch((error) => logger.warn('CRT postFX initial capture failed', error));
     }
   };
-
   const chooseMode = (preference: CRTModePreference): CRTRenderMode => {
     if (preference === 'css') {
       return 'css';

@@ -1,3 +1,4 @@
+import type { SceneTextureTarget } from './sceneTypes';
 export type CRTRenderMode = 'webgpu' | 'webgl2' | 'css';
 
 export interface UniformState {
@@ -53,6 +54,7 @@ export interface CRTGpuRenderer {
   render(uniforms: Float32Array): RendererTimings;
   resize(width: number, height: number, cssWidth: number, cssHeight: number): void;
   updateTexture(frame: CaptureFrame): Promise<void>;
+  bindSceneTexture?(target: SceneTextureTarget): Promise<void>;
   updateGeometry(params: {
     width: number;
     height: number;
@@ -69,4 +71,6 @@ export interface RendererTimings {
   timestampAccurate: boolean;
   stages?: Record<string, number>;
 }
+
+
 

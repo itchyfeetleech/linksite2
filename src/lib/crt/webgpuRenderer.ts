@@ -1,5 +1,6 @@
 import shaderSource from './shaders/crt.wgsl?raw';
 import type { CaptureFrame, CRTGpuRenderer, RendererTimings } from './types';
+import type { SceneTextureTarget } from './sceneTypes';
 import { UNIFORM_FLOAT_COUNT } from './types';
 import { logger } from '../logger';
 
@@ -32,6 +33,8 @@ export class WebGpuRenderer implements CRTGpuRenderer {
   private renderBindGroupLayout: GPUBindGroupLayout | null = null;
   private renderPipelineLayout: GPUPipelineLayout | null = null;
   private sceneTexture: GPUTexture | null = null;
+  private sceneTextureView: GPUTextureView | null = null;
+  private sceneTextureOwned = false;
   private sceneTextureSize: TextureSize | null = null;
   private canvas: HTMLCanvasElement | null = null;
   private format: GPUTextureFormat | null = null;
@@ -321,7 +324,7 @@ export class WebGpuRenderer implements CRTGpuRenderer {
   }
 
   private updateRenderBindGroup() {
-    if (!this.device || !this.renderBindGroupLayout || !this.uniformBuffer || !this.sampler || !this.sceneTexture) {
+    if (!this.device || !this.renderBindGroupLayout || !this.uniformBuffer || !this.sampler || !this.sceneTextureView) {
       return;
     }
 
@@ -331,7 +334,7 @@ export class WebGpuRenderer implements CRTGpuRenderer {
       entries: [
         { binding: 0, resource: { buffer: this.uniformBuffer } },
         { binding: 1, resource: this.sampler },
-        { binding: 2, resource: this.sceneTexture.createView({ label: 'crt-scene-view' }) }
+        { binding: 2, resource: this.sceneTextureView }
       ]
     });
   }
@@ -346,8 +349,10 @@ export class WebGpuRenderer implements CRTGpuRenderer {
       this.sceneTextureSize.width !== frame.width ||
       this.sceneTextureSize.height !== frame.height;
 
-    if (needsResize) {
-      this.sceneTexture?.destroy();
+    if (needsResize || !this.sceneTextureOwned) {
+      if (this.sceneTextureOwned && this.sceneTexture) {
+        this.sceneTexture.destroy();
+      }
       this.sceneTexture = this.device.createTexture({
         label: 'crt-scene-texture',
         size: { width: frame.width, height: frame.height },
@@ -357,7 +362,9 @@ export class WebGpuRenderer implements CRTGpuRenderer {
           GPUTextureUsage.COPY_DST |
           GPUTextureUsage.RENDER_ATTACHMENT
       });
+      this.sceneTextureView = this.sceneTexture.createView({ label: 'crt-scene-view' });
       this.sceneTextureSize = { width: frame.width, height: frame.height };
+      this.sceneTextureOwned = true;
       this.updateRenderBindGroup();
     }
 
@@ -373,6 +380,25 @@ export class WebGpuRenderer implements CRTGpuRenderer {
     );
 
     frame.bitmap.close();
+  }
+
+  async bindSceneTexture(target: SceneTextureTarget) {
+    if (!this.device) {
+      throw new Error('WebGPU renderer not initialised');
+    }
+    if (target.kind !== 'webgpu') {
+      throw new Error(`Unsupported scene texture kind: ${target.kind}`);
+    }
+
+    if (this.sceneTextureOwned && this.sceneTexture) {
+      this.sceneTexture.destroy();
+    }
+
+    this.sceneTexture = target.texture;
+    this.sceneTextureView = target.view;
+    this.sceneTextureOwned = false;
+    this.sceneTextureSize = { width: target.width, height: target.height };
+    this.updateRenderBindGroup();
   }
 
   async updateGeometry(_params: { width: number; height: number; dpr: number; k1: number; k2: number }) {}
@@ -558,9 +584,13 @@ export class WebGpuRenderer implements CRTGpuRenderer {
   }
 
   destroy() {
-    this.sceneTexture?.destroy();
+    if (this.sceneTextureOwned && this.sceneTexture) {
+      this.sceneTexture.destroy();
+    }
     this.sceneTexture = null;
+    this.sceneTextureView = null;
     this.sceneTextureSize = null;
+    this.sceneTextureOwned = false;
     this.uniformBuffer?.destroy();
     this.uniformBuffer = null;
     this.timestampQuerySet?.destroy?.();
@@ -584,3 +614,9 @@ export const createWebGpuRenderer = async (canvas: HTMLCanvasElement) => {
   await renderer.init(canvas);
   return renderer;
 };
+
+
+
+
+
+
