@@ -168,7 +168,11 @@
 
   $: stageAverage = healthSnapshot.stageAverage ?? {};
   $: stageP95 = healthSnapshot.stageP95 ?? {};
-  $: stageKeys = Array.from(new Set([...Object.keys(stageAverage), ...Object.keys(stageP95)])).sort();
+  $: stageKeys = Array.from(new Set([...Object.keys(stageAverage), ...Object.keys(stageP95)])).filter((key) => {
+    const average = stageAverage[key] ?? 0;
+    const percentile = stageP95[key] ?? 0;
+    return average > 0.0001 || percentile > 0.0001;
+  }).sort();
   $: avgFps = healthSnapshot.average?.fps ?? (healthSnapshot.average.totalMs > 0 ? 1000 / healthSnapshot.average.totalMs : 0);
   $: latestFps = healthSnapshot.latest?.fps ?? (healthSnapshot.latest.totalMs > 0 ? 1000 / healthSnapshot.latest.totalMs : 0);
 
@@ -808,7 +812,8 @@
       throttleMs: getIdleThrottle(),
       ignore: (element) =>
         element instanceof HTMLElement && element.dataset?.crtPostfxIgnore === 'true',
-      onCapture: handleCapture
+      onCapture: handleCapture,
+      getScale: () => (window.devicePixelRatio || 1) * internalScale
     });
 
     domCapture.updateThrottle(pointerDown ? getDragThrottle() : getIdleThrottle());
