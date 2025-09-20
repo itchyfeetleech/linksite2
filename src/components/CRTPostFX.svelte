@@ -75,7 +75,7 @@
   const MAX_BARREL_K1 = 0.02;
   const MAX_BARREL_K2 = 0.005;
   const WARP_SAMPLE_POINTS = [0.1, 0.5, 0.9];
-  const INTERNAL_SCALE_MIN = 0.6;
+  const INTERNAL_SCALE_MIN = 0.4;
   const INTERNAL_SCALE_MAX = 1;
   const INTERNAL_SCALE_DECAY = 0.9;
   const INTERNAL_SCALE_GROWTH = 1.05;

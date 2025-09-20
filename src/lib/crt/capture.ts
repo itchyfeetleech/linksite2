@@ -34,6 +34,8 @@ export interface DomCaptureController {
 const DEFAULT_THROTTLE = 40;
 const MAX_PARTIAL_RATIO = 0.85;
 const EXPAND_PADDING = 6;
+const CAPTURE_COOLDOWN_MULTIPLIER = 1.4;
+const MAX_DYNAMIC_THROTTLE = 260;
 
 const rectArea = (rect: Rect) => rect.width * rect.height;
 
@@ -138,6 +140,7 @@ export const createDomCapture = ({
   let canvasPixelHeight = 0;
   let dirtyRect: Rect | null = null;
   let fullDirty = true;
+  let captureCooldownUntil = 0;
 
   const ignorePredicate =
     ignore ?? ((element: Element) => element instanceof HTMLElement && element.dataset.crtPostfxIgnore === 'true');
@@ -319,6 +322,10 @@ export const createDomCapture = ({
     }
 
     const now = performance.now();
+    if (!force && now < captureCooldownUntil) {
+      schedule();
+      return;
+    }
     if (!force && running) {
       return;
     }
@@ -426,6 +433,8 @@ export const createDomCapture = ({
       const imageBitmap = await createImageBitmap(captureCanvas as unknown as ImageBitmapSource, bitmapOptions);
       const bitmapDuration = performance.now() - bitmapStart;
 
+      const totalDuration = renderDuration + bitmapDuration;
+
       await onCapture(
         {
           bitmap: imageBitmap,
@@ -433,8 +442,14 @@ export const createDomCapture = ({
           height: canvasPixelHeight,
           dpr: scale
         },
-        { duration: renderDuration + bitmapDuration }
+        { duration: totalDuration }
       );
+
+      if (!force && totalDuration > CAPTURE_SPIKE_THRESHOLD) {
+        captureCooldownUntil = performance.now() + totalDuration * CAPTURE_COOLDOWN_MULTIPLIER;
+        const suggestedThrottle = Math.floor(totalDuration * CAPTURE_COOLDOWN_MULTIPLIER);
+        throttle = Math.min(MAX_DYNAMIC_THROTTLE, Math.max(throttle, suggestedThrottle));
+      }
     } catch (error) {
       logger.warn('CRT postFX capture failed', error);
     } finally {
