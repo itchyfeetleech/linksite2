@@ -75,6 +75,14 @@
   const MAX_BARREL_K1 = 0.02;
   const MAX_BARREL_K2 = 0.005;
   const WARP_SAMPLE_POINTS = [0.1, 0.5, 0.9];
+  const INTERNAL_SCALE_MIN = 0.6;
+  const INTERNAL_SCALE_MAX = 1;
+  const INTERNAL_SCALE_DECAY = 0.9;
+  const INTERNAL_SCALE_GROWTH = 1.05;
+  const CAPTURE_SPIKE_THRESHOLD = 20;
+  const CAPTURE_SPIKE_LOG_THRESHOLD = 15;
+  const CAPTURE_RECOVERY_THRESHOLD = 12;
+  const CAPTURE_RECOVERY_FRAMES = 240;
 
   const clamp01 = (value: number) => Math.min(Math.max(value, 0), 1);
 
@@ -163,8 +171,9 @@
   let gpuTimingAccurate = false;
   const PERF_LOG_INTERVAL = 180;
   let perfLogCounter = 0;
-  let internalScale = 1;
+  let internalScale = 0.8;
   let qualityTier: 'Ultra' | 'High' | 'Balanced' | 'Low' = 'Balanced';
+  let steadyCaptureFrames = 0;
 
   $: stageAverage = healthSnapshot.stageAverage ?? {};
   $: stageP95 = healthSnapshot.stageP95 ?? {};
@@ -175,6 +184,40 @@
   }).sort();
   $: avgFps = healthSnapshot.average?.fps ?? (healthSnapshot.average.totalMs > 0 ? 1000 / healthSnapshot.average.totalMs : 0);
   $: latestFps = healthSnapshot.latest?.fps ?? (healthSnapshot.latest.totalMs > 0 ? 1000 / healthSnapshot.latest.totalMs : 0);
+
+  const clampInternalScale = (value: number) => Math.max(INTERNAL_SCALE_MIN, Math.min(INTERNAL_SCALE_MAX, value));
+
+  const applyInternalScale = (value: number, reason: string) => {
+    const clamped = Number(clampInternalScale(value).toFixed(3));
+    if (Math.abs(clamped - internalScale) < 1e-3) {
+      return;
+    }
+    internalScale = clamped;
+    logger.info('CRT postFX internal scale adjusted', { reason, internalScale });
+    domCapture?.trigger();
+  };
+
+  const adjustInternalScaleForCapture = (duration: number) => {
+    if (qualityTier !== 'Balanced') {
+      return;
+    }
+
+    if (duration > CAPTURE_SPIKE_THRESHOLD && internalScale > INTERNAL_SCALE_MIN) {
+      steadyCaptureFrames = 0;
+      applyInternalScale(internalScale * INTERNAL_SCALE_DECAY, 'capture-spike');
+      return;
+    }
+
+    if (duration < CAPTURE_RECOVERY_THRESHOLD && internalScale < INTERNAL_SCALE_MAX) {
+      steadyCaptureFrames += 1;
+      if (steadyCaptureFrames >= CAPTURE_RECOVERY_FRAMES) {
+        applyInternalScale(internalScale * INTERNAL_SCALE_GROWTH, 'capture-recovery');
+        steadyCaptureFrames = 0;
+      }
+    } else {
+      steadyCaptureFrames = 0;
+    }
+  };
 
   const matrixHash = (matrix: Float32Array) => {
     let hash = 2166136261 >>> 0;
@@ -274,7 +317,7 @@
 
   const pointerIndex = (type: string) => POINTER_INDEX[type] ?? 0;
 
-  const getIdleThrottle = () => (reduceMotion ? 180 : 120);
+  const getIdleThrottle = () => (reduceMotion ? 120 : 40);
   const getDragThrottle = () => (reduceMotion ? 34 : 24);
 
   const setCanvasInteractionEnabled = (enabled: boolean) => {

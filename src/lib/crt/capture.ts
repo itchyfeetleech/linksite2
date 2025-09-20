@@ -31,7 +31,7 @@ export interface DomCaptureController {
   destroy(): void;
 }
 
-const DEFAULT_THROTTLE = 80;
+const DEFAULT_THROTTLE = 40;
 const MAX_PARTIAL_RATIO = 0.85;
 const EXPAND_PADDING = 6;
 
@@ -216,22 +216,45 @@ export const createDomCapture = ({
     return null;
   };
 
+  const considerNode = (node: Node, viewport: Rect): boolean => {
+    if (node instanceof Element && ignorePredicate(node)) {
+      return false;
+    }
+    const rect = elementRect(node);
+    if (!rect) {
+      return false;
+    }
+    markDirtyRect(intersectRect(expandRect(rect, EXPAND_PADDING), viewport));
+    return true;
+  };
+
   const handleMutation: MutationCallback = (mutations) => {
     if (disposed) {
       return;
     }
-    let updated = false;
     const viewport = viewportRect();
+    let mutated = false;
+
     for (const mutation of mutations) {
-      const rect = elementRect(mutation.target);
-      if (rect) {
-        markDirtyRect(intersectRect(expandRect(rect, EXPAND_PADDING), viewport));
-        updated = true;
+      if (considerNode(mutation.target, viewport)) {
+        mutated = true;
       }
+      mutation.addedNodes?.forEach((node) => {
+        if (considerNode(node, viewport)) {
+          mutated = true;
+        }
+      });
+      mutation.removedNodes?.forEach((node) => {
+        if (considerNode(node, viewport)) {
+          mutated = true;
+        }
+      });
     }
-    if (!updated) {
+
+    if (!mutated) {
       markDirtyFull();
     }
+
     schedule();
   };
 
